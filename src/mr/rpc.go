@@ -1,23 +1,27 @@
 package mr
 
-//
-// RPC definitions.
-//
-// remember to capitalize all names.
-//
+type TaskPhase int
 
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
+const (
+	MapPhase TaskPhase = iota
+	ReducePhase
+	WaitPhase
+	ExitPhase
+)
 
-type ExampleArgs struct {
-	X int
+type TaskRequest struct{}
+
+type TaskResponse struct {
+	Phase    TaskPhase
+	TaskId   int
+	FileName string
+	NReduce  int
+	NMap     int
 }
 
-type ExampleReply struct {
-	Y int
+type ReportTaskRequest struct {
+	Phase  TaskPhase
+	TaskId int
 }
 
-// Add your RPC definitions here.
-
+type ReportTaskResponse struct{}
