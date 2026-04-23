@@ -7,6 +7,7 @@ This repository contains my personal implementations for the labs in [MIT's Grad
 | Lab | Title                                                          | Status | Key Concepts |
 | :--- |:---------------------------------------------------------------| :--- | :--- |
 | **1** | [MapReduce](https://pdos.csail.mit.edu/6.824/labs/lab-mr.html) | ✅ Complete | Fault tolerance, RPCs, Data Partitioning |
+| **2** | [Key/Value Server](https://pdos.csail.mit.edu/6.824/labs/lab-kvsrv1.html) | ✅ Complete | At-Most-Once, Ambiguity Resolution, Locking |
 
 ---
 
@@ -21,14 +22,21 @@ A distributed MapReduce system built in Go, modeled after the original Google ar
 
 ---
 
-## 🏗️ Future Labs (Placeholders)
+## Lab 2: Key/Value Server & Distributed Lock
 
-##  Lab 2: Key/Value server
+A fault-tolerant Key/Value service and a distributed lock implementation designed to operate over an unreliable network.
 
-
-
+### Key Components
+* **Ambiguity Resolution:** When a network drop occurs, the Clerk identifies "maybe" scenarios where a request might have succeeded on the server but the acknowledgment was lost.
+* **Distributed Lock:** A robust lock implementation using unique Owner IDs. It resolves state ambiguity by re-verifying the key value after an `ErrMaybe` response.
 ---
 
 ## 🧪 Testing
 
-The labs are verified using the official MIT test suite and I also add unit tests to help understanding the behaviors.
+The labs are verified using the official MIT test suite. To deepen understanding and ensure robustness, I have added some unit tests.
+
+## 🏗️ Future Labs (Placeholders)
+
+| Lab | Title | Status |
+| :--- | :--- | :--- |
+| **3** | Raft Consensus | ⏳ Pending |
