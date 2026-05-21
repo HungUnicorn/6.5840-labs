@@ -8,7 +8,7 @@ This repository contains my personal implementations for the labs in [MIT's Grad
 | :--- |:---------------------------------------------------------------| :--- |:-------------------------------------|
 | **1** | [MapReduce](https://pdos.csail.mit.edu/6.824/labs/lab-mr.html) | ✅ Complete | Fault tolerance, RPCs, Data Partitioning |
 | **2** | [Key/Value Server](https://pdos.csail.mit.edu/6.824/labs/lab-kvsrv1.html) | ✅ Complete | At-Most-Once, Ambiguity Resolution, Locking |
-| **3** | [Raft Consensus](https://pdos.csail.mit.edu/6.824/labs/lab-raft1.html) | 🚧 Part 3A Done | Leader Election, Heartbeats |
+| **3** | [Raft Consensus](https://pdos.csail.mit.edu/6.824/labs/lab-raft1.html) | 🚧 Part 3A & 3B Done | Leader Election, Log Replication |
 ---
 
 ## Lab 1: MapReduce
@@ -39,6 +39,12 @@ The first phase implements the core election sub-problem and leadership authorit
 
 * **State Machine Transitions:** Precise implementation of **Follower**, **Candidate**, and **Leader** roles.
 * **Heartbeat Mechanism:** Established a background `heartbeatTicker` to broadcast `AppendEntries` RPCs, suppressing subordinate elections and asserting authority.
+
+### Part 3B: Log Replication
+This phase focuses on the core consensus mechanism, ensuring that logs are consistently replicated across a majority of followers before being committed.
+
+* **Log Consistency:** Strict conflict optimization and fast log rollback logic in `AppendEntries` to quickly resolve divergences.
+* **Commit Progression:** The leader accurately updates its commit index based on the highest log index replicated to a majority of peers.
 
 ---
 
