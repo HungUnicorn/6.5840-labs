@@ -41,9 +41,10 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 
 	// Persistent state
-	currentTerm int
-	votedFor    int
-	logEntries  []LogEntry
+	currentTerm   int
+	votedFor      int
+	logEntries    []LogEntry
+	snapshotIndex int
 
 	// Volatile state on all servers
 	role                  Role
@@ -124,6 +125,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.logEntries = make([]LogEntry, 1)
 	rf.highestCommittedIndex = 0
 	rf.highestAppliedIndex = 0
+	rf.snapshotIndex = 0
 	rf.mu.Unlock()
 
 	// initialize from state persisted before a crash

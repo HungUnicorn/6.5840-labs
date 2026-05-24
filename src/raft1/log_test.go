@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"6.5840/labrpc"
+	"6.5840/raftapi"
 	tester "6.5840/tester1"
 )
 
@@ -437,5 +438,125 @@ func TestAdvanceLeaderCommitIndex(t *testing.T) {
 					rf.highestCommittedIndex, tt.wantCommitIndex)
 			}
 		})
+	}
+}
+
+func TestAcknowledgeValidLeader(t *testing.T) {
+	rf := makeTestRaft([]LogEntry{entry(0)})
+	rf.role = Candidate
+	rf.currentTerm = 2
+
+	rf.acknowledgeValidLeader(3)
+	if rf.role != Follower || rf.currentTerm != 3 {
+		t.Errorf("Expected Follower in term 3, got %v in %d", rf.role, rf.currentTerm)
+	}
+
+	rf.role = Candidate
+	rf.acknowledgeValidLeader(3)
+	if rf.role != Follower || rf.currentTerm != 3 {
+		t.Errorf("Expected Follower to reset heartbeat, got %v", rf.role)
+	}
+}
+
+func TestTruncateLogForLocalSnapshot(t *testing.T) {
+	rf := makeTestRaft([]LogEntry{entry(0), entry(1), entry(2), entry(3)})
+	rf.snapshotIndex = 0
+
+	rf.truncateLogForLocalSnapshot(2)
+
+	if rf.snapshotIndex != 2 {
+		t.Errorf("snapshotIndex = %d, want 2", rf.snapshotIndex)
+	}
+	if len(rf.logEntries) != 2 { // indices 2 and 3 remain (so length 2)
+		t.Fatalf("len = %d, want 2", len(rf.logEntries))
+	}
+	if rf.logEntries[0].ElectionTerm != 2 || rf.logEntries[1].ElectionTerm != 3 {
+		t.Errorf("log mismatch: %v", rf.logEntries)
+	}
+}
+
+func TestTruncateLogForInstallSnapshot(t *testing.T) {
+	tests := []struct {
+		name              string
+		log               []LogEntry
+		lastIncludedIndex int
+		lastIncludedTerm  int
+		wantLogLength     int
+		wantFirstTerm     int
+	}{
+		{
+			name:              "has matching entry",
+			log:               []LogEntry{entry(0), entry(1), entry(2), entry(3)},
+			lastIncludedIndex: 2,
+			lastIncludedTerm:  2,
+			wantLogLength:     2,
+			wantFirstTerm:     2, // term of index 2
+		},
+		{
+			name:              "no matching entry truncates all",
+			log:               []LogEntry{entry(0), entry(1), entry(2)},
+			lastIncludedIndex: 4,
+			lastIncludedTerm:  4,
+			wantLogLength:     1,
+			wantFirstTerm:     4,
+		},
+		{
+			name:              "term mismatch truncates all",
+			log:               []LogEntry{entry(0), entry(1), entry(2)},
+			lastIncludedIndex: 2,
+			lastIncludedTerm:  99,
+			wantLogLength:     1,
+			wantFirstTerm:     99,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rf := makeTestRaft(tt.log)
+			rf.truncateLogForInstallSnapshot(tt.lastIncludedIndex, tt.lastIncludedTerm)
+
+			if len(rf.logEntries) != tt.wantLogLength {
+				t.Fatalf("log length = %d, want %d", len(rf.logEntries), tt.wantLogLength)
+			}
+			if rf.logEntries[0].ElectionTerm != tt.wantFirstTerm {
+				t.Errorf("first term = %d, want %d", rf.logEntries[0].ElectionTerm, tt.wantFirstTerm)
+			}
+			if rf.snapshotIndex != tt.lastIncludedIndex {
+				t.Errorf("snapshotIndex = %d, want %d", rf.snapshotIndex, tt.lastIncludedIndex)
+			}
+		})
+	}
+}
+
+func TestAdvanceIndicesForSnapshot(t *testing.T) {
+	rf := makeTestRaft([]LogEntry{entry(0)})
+	rf.highestCommittedIndex = 1
+	rf.highestAppliedIndex = 2
+
+	rf.advanceIndicesForSnapshot(5)
+
+	if rf.highestCommittedIndex != 5 || rf.highestAppliedIndex != 5 {
+		t.Errorf("indices not advanced properly: commit=%d, apply=%d", rf.highestCommittedIndex, rf.highestAppliedIndex)
+	}
+
+	// Should not regress
+	rf.advanceIndicesForSnapshot(3)
+	if rf.highestCommittedIndex != 5 || rf.highestAppliedIndex != 5 {
+		t.Errorf("indices regressed: commit=%d, apply=%d", rf.highestCommittedIndex, rf.highestAppliedIndex)
+	}
+}
+
+func TestPushSnapshotToService(t *testing.T) {
+	applyCh := make(chan raftapi.ApplyMsg, 1)
+	rf := makeTestRaft([]LogEntry{entry(0)})
+	rf.applyCh = applyCh
+	rf.mu.Lock()
+
+	rf.pushSnapshotToService(5, 3, []byte("data"))
+	rf.mu.Unlock() // pushSnapshotToService unlocks and relocks, but we need to unlock at the end of test
+
+	msg := <-applyCh
+	if !msg.SnapshotValid || msg.SnapshotIndex != 5 || msg.SnapshotTerm != 3 || string(msg.Snapshot) != "data" {
+		t.Errorf("Invalid snapshot message: %v", msg)
 	}
 }

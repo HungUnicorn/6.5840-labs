@@ -8,7 +8,7 @@ This repository contains my personal implementations for the labs in [MIT's Grad
 | :--- |:---------------------------------------------------------------| :--- |:-------------------------------------|
 | **1** | [MapReduce](https://pdos.csail.mit.edu/6.824/labs/lab-mr.html) | ✅ Complete | Fault tolerance, RPCs, Data Partitioning |
 | **2** | [Key/Value Server](https://pdos.csail.mit.edu/6.824/labs/lab-kvsrv1.html) | ✅ Complete | At-Most-Once, Ambiguity Resolution, Locking |
-| **3** | [Raft Consensus](https://pdos.csail.mit.edu/6.824/labs/lab-raft1.html) | 🚧 Part 3A & 3B Done | Leader Election, Log Replication |
+| **3** | [Raft Consensus](https://pdos.csail.mit.edu/6.824/labs/lab-raft1.html) | ✅ Complete | Leader Election, Log Replication, Persistence, Snapshots |
 ---
 
 ## Lab 1: MapReduce
@@ -30,7 +30,7 @@ A fault-tolerant Key/Value service and a distributed lock implementation designe
 * **Ambiguity Resolution:** When a network drop occurs, the Clerk identifies "maybe" scenarios where a request might have succeeded on the server but the acknowledgment was lost.
 * **Distributed Lock:** A robust lock implementation using unique Owner IDs. It resolves state ambiguity by re-verifying the key value after an `ErrMaybe` response.
 
-## Lab 3: Raft Consensus (In Progress)
+## Lab 3: Raft Consensus
 
 A Go implementation of the **Raft distributed consensus protocol**, building a replicated state machine that remains consistent despite network partitions and server failures.
 
@@ -45,6 +45,18 @@ This phase focuses on the core consensus mechanism, ensuring that logs are consi
 
 * **Log Consistency:** Strict conflict optimization and fast log rollback logic in `AppendEntries` to quickly resolve divergences.
 * **Commit Progression:** The leader accurately updates its commit index based on the highest log index replicated to a majority of peers.
+
+### Part 3C: Persistence
+Servers must be able to recover from crashes and resume their place in the cluster without jeopardizing safety.
+
+* **Durable State:** Raft systematically saves `currentTerm`, `votedFor`, and `logEntries` to non-volatile storage (simulated via `tester1.Persister`) using the `labgob` encoder before responding to RPCs.
+* **Crash Recovery:** Servers seamlessly rebuild their state from persistence upon initialization.
+
+### Part 3D: Log Compaction (Snapshots)
+A long-running service cannot retain its entire log in memory forever. Raft coordinates with the state machine to truncate old log entries using snapshots.
+
+* **Offset Architecture:** Decoupled the cluster's logical indices from the Go slice physical indices using a `snapshotIndex` offset mapping (`logical2Physical`).
+* **InstallSnapshot RPC:** The leader automatically identifies when a follower has fallen so far behind that the necessary logs have already been truncated, forcing synchronization via an `InstallSnapshot` RPC.
 
 ---
 

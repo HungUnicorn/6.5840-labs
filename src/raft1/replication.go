@@ -22,8 +22,25 @@ type AppendEntriesReply struct {
 	LogLength     int
 }
 
+type InstallSnapshotArgs struct {
+	Term              int
+	LeaderId          int
+	LastIncludedIndex int
+	LastIncludedTerm  int
+	Data              []byte
+}
+
+type InstallSnapshotReply struct {
+	Term int
+}
+
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
+
+func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) bool {
+	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
 	return ok
 }
 
@@ -65,6 +82,23 @@ func (rf *Raft) replicateToPeer(targetPeerId int, termSnapshot int) {
 		return
 	}
 
+	if rf.nextLogIndexToSend[targetPeerId] <= rf.snapshotIndex {
+		args := InstallSnapshotArgs{
+			Term:              rf.currentTerm,
+			LeaderId:          rf.me,
+			LastIncludedIndex: rf.snapshotIndex,
+			LastIncludedTerm:  rf.logEntries[0].ElectionTerm,
+			Data:              rf.persister.ReadSnapshot(),
+		}
+		rf.mu.Unlock()
+
+		reply := InstallSnapshotReply{}
+		if rf.sendInstallSnapshot(targetPeerId, &args, &reply) {
+			rf.handleInstallSnapshotReply(targetPeerId, &args, &reply)
+		}
+		return
+	}
+
 	args := rf.buildAppendEntriesArgs(targetPeerId)
 	rf.mu.Unlock()
 
@@ -76,13 +110,33 @@ func (rf *Raft) replicateToPeer(targetPeerId int, termSnapshot int) {
 	}
 }
 
+func (rf *Raft) handleInstallSnapshotReply(targetPeerId int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if rf.currentTerm != args.Term || rf.role != Leader {
+		return
+	}
+
+	if reply.Term > rf.currentTerm {
+		rf.becomeFollower(reply.Term)
+		return
+	}
+
+	if args.LastIncludedIndex > rf.highestReplicatedIndex[targetPeerId] {
+		rf.highestReplicatedIndex[targetPeerId] = args.LastIncludedIndex
+		rf.nextLogIndexToSend[targetPeerId] = args.LastIncludedIndex + 1
+		rf.advanceLeaderCommitIndex()
+	}
+}
+
 func (rf *Raft) buildAppendEntriesArgs(targetPeerId int) AppendEntriesArgs {
 	nextIndexRequired := rf.nextLogIndexToSend[targetPeerId]
 	indexBeforeNew := nextIndexRequired - 1
-	termBeforeNew := rf.logEntries[indexBeforeNew].ElectionTerm
+	termBeforeNew := rf.logEntries[rf.logical2Physical(indexBeforeNew)].ElectionTerm
 
 	entriesToSend := make([]LogEntry, rf.getLatestLogIndex()-indexBeforeNew)
-	copy(entriesToSend, rf.logEntries[nextIndexRequired:])
+	copy(entriesToSend, rf.logEntries[rf.logical2Physical(nextIndexRequired):])
 
 	return AppendEntriesArgs{
 		Term:                        rf.currentTerm,
@@ -149,4 +203,24 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.updateFollowerCommitIndex(args.LeaderHighestCommittedIndex, args.IndexBeforeNewEntries, len(args.NewEntries))
 
 	reply.Success = true
+}
+
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	reply.Term = rf.currentTerm
+
+	if args.Term < rf.currentTerm {
+		return
+	}
+
+	rf.acknowledgeValidLeader(args.Term)
+	reply.Term = rf.currentTerm
+
+	if args.LastIncludedIndex <= rf.snapshotIndex {
+		return
+	}
+
+	rf.commitSnapshot(args.LastIncludedIndex, args.LastIncludedTerm, args.Data)
 }

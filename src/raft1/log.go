@@ -6,17 +6,26 @@ import (
 	"6.5840/raftapi"
 )
 
+func (rf *Raft) logical2Physical(logicalIndex int) int {
+	return logicalIndex - rf.snapshotIndex
+}
+
 func (rf *Raft) getLatestLogIndex() int {
-	return len(rf.logEntries) - 1
+	return len(rf.logEntries) - 1 + rf.snapshotIndex
 }
 
 func (rf *Raft) getLatestLogTerm() int {
-	return rf.logEntries[rf.getLatestLogIndex()].ElectionTerm
+	return rf.logEntries[rf.logical2Physical(rf.getLatestLogIndex())].ElectionTerm
 }
 
 func (rf *Raft) advanceLeaderCommitIndex() {
 	for candidateIndex := rf.getLatestLogIndex(); candidateIndex > rf.highestCommittedIndex; candidateIndex-- {
-		isNotFromCurrentTerm := rf.logEntries[candidateIndex].ElectionTerm != rf.currentTerm
+		isBeforeSnapshot := candidateIndex <= rf.snapshotIndex
+		if isBeforeSnapshot {
+			break
+		}
+
+		isNotFromCurrentTerm := rf.logEntries[rf.logical2Physical(candidateIndex)].ElectionTerm != rf.currentTerm
 		if isNotFromCurrentTerm {
 			continue
 		}
@@ -46,9 +55,16 @@ func (rf *Raft) applier() {
 		}
 
 		rf.highestAppliedIndex++
+		
+		isWokenUpAfterInstallSnapshot := rf.highestAppliedIndex <= rf.snapshotIndex
+		if isWokenUpAfterInstallSnapshot {
+			rf.highestAppliedIndex = rf.snapshotIndex
+			continue
+		}
+
 		message := raftapi.ApplyMsg{
 			CommandValid: true,
-			Command:      rf.logEntries[rf.highestAppliedIndex].Command,
+			Command:      rf.logEntries[rf.logical2Physical(rf.highestAppliedIndex)].Command,
 			CommandIndex: rf.highestAppliedIndex,
 		}
 
@@ -70,14 +86,19 @@ func (rf *Raft) acknowledgeValidLeader(leaderTerm int) {
 func (rf *Raft) checkLogConsistency(args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	reply.ConflictTerm = -1
 	reply.ConflictIndex = -1
-	reply.LogLength = len(rf.logEntries)
+	reply.LogLength = len(rf.logEntries) + rf.snapshotIndex
 
 	logIsTooShort := rf.getLatestLogIndex() < args.IndexBeforeNewEntries
 	if logIsTooShort {
 		return false
 	}
 
-	termAtPrevIndex := rf.logEntries[args.IndexBeforeNewEntries].ElectionTerm
+	leaderPrevIndexDiscardedBySnapshot := args.IndexBeforeNewEntries < rf.snapshotIndex
+	if leaderPrevIndexDiscardedBySnapshot {
+		return false
+	}
+
+	termAtPrevIndex := rf.logEntries[rf.logical2Physical(args.IndexBeforeNewEntries)].ElectionTerm
 	termsMatch := termAtPrevIndex == args.TermBeforeNewEntries
 	if !termsMatch {
 		reply.ConflictTerm = termAtPrevIndex
@@ -90,7 +111,7 @@ func (rf *Raft) checkLogConsistency(args *AppendEntriesArgs, reply *AppendEntrie
 
 func (rf *Raft) findFirstIndexOfTerm(term int, startIndex int) int {
 	firstIndex := startIndex
-	for firstIndex > 1 && rf.logEntries[firstIndex-1].ElectionTerm == term {
+	for firstIndex > rf.snapshotIndex+1 && rf.logEntries[rf.logical2Physical(firstIndex-1)].ElectionTerm == term {
 		firstIndex--
 	}
 	return firstIndex
@@ -100,11 +121,17 @@ func (rf *Raft) mergeLogEntries(indexBeforeNew int, newEntries []LogEntry) {
 	for i, incomingEntry := range newEntries {
 		targetIndex := indexBeforeNew + 1 + i
 
+		isAlreadySnapshotted := targetIndex <= rf.snapshotIndex
+		if isAlreadySnapshotted {
+			continue
+		}
+
 		existsLocally := targetIndex <= rf.getLatestLogIndex()
 		if existsLocally {
-			hasConflict := rf.logEntries[targetIndex].ElectionTerm != incomingEntry.ElectionTerm
+			physicalIndex := rf.logical2Physical(targetIndex)
+			hasConflict := rf.logEntries[physicalIndex].ElectionTerm != incomingEntry.ElectionTerm
 			if hasConflict {
-				rf.logEntries = rf.logEntries[:targetIndex]
+				rf.logEntries = rf.logEntries[:physicalIndex]
 				rf.logEntries = append(rf.logEntries, newEntries[i:]...)
 				rf.persist()
 				return
@@ -148,12 +175,58 @@ func (rf *Raft) calculateNextIndexFastRollback(conflictTerm int, conflictIndex i
 		return followerLogLength
 	}
 
-	for i := rf.getLatestLogIndex(); i > 0; i-- {
-		leaderHasConflictTerm := rf.logEntries[i].ElectionTerm == conflictTerm
+	for i := rf.getLatestLogIndex(); i > rf.snapshotIndex; i-- {
+		leaderHasConflictTerm := rf.logEntries[rf.logical2Physical(i)].ElectionTerm == conflictTerm
 		if leaderHasConflictTerm {
 			return i + 1
 		}
 	}
 
 	return conflictIndex
+}
+
+func (rf *Raft) truncateLogForLocalSnapshot(index int) {
+	physicalIndex := rf.logical2Physical(index)
+	newLog := make([]LogEntry, len(rf.logEntries)-physicalIndex)
+	copy(newLog, rf.logEntries[physicalIndex:])
+	rf.logEntries = newLog
+	rf.snapshotIndex = index
+}
+
+func (rf *Raft) truncateLogForInstallSnapshot(lastIncludedIndex int, lastIncludedTerm int) {
+	hasMatchingEntry := lastIncludedIndex <= rf.getLatestLogIndex() &&
+		rf.logEntries[rf.logical2Physical(lastIncludedIndex)].ElectionTerm == lastIncludedTerm
+
+	if hasMatchingEntry {
+		physicalIndex := rf.logical2Physical(lastIncludedIndex)
+		newLog := make([]LogEntry, len(rf.logEntries)-physicalIndex)
+		copy(newLog, rf.logEntries[physicalIndex:])
+		rf.logEntries = newLog
+	} else {
+		rf.logEntries = []LogEntry{{ElectionTerm: lastIncludedTerm, Command: nil}}
+	}
+
+	rf.snapshotIndex = lastIncludedIndex
+}
+
+func (rf *Raft) advanceIndicesForSnapshot(lastIncludedIndex int) {
+	if rf.highestCommittedIndex < lastIncludedIndex {
+		rf.highestCommittedIndex = lastIncludedIndex
+	}
+	if rf.highestAppliedIndex < lastIncludedIndex {
+		rf.highestAppliedIndex = lastIncludedIndex
+	}
+}
+
+func (rf *Raft) pushSnapshotToService(lastIncludedIndex int, lastIncludedTerm int, data []byte) {
+	msg := raftapi.ApplyMsg{
+		SnapshotValid: true,
+		Snapshot:      data,
+		SnapshotTerm:  lastIncludedTerm,
+		SnapshotIndex: lastIncludedIndex,
+	}
+
+	rf.mu.Unlock()
+	rf.applyCh <- msg
+	rf.mu.Lock()
 }
