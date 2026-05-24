@@ -38,6 +38,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateId
 		rf.lastHeartbeat = time.Now()
+		rf.persist()
 	} else {
 		reply.VoteGranted = false
 	}
@@ -103,6 +104,7 @@ func (rf *Raft) becomeFollower(newTerm int) {
 	rf.currentTerm = newTerm
 	rf.votedFor = -1
 	rf.lastHeartbeat = time.Now()
+	rf.persist()
 }
 
 func (rf *Raft) becomeCandidate() {
@@ -110,6 +112,7 @@ func (rf *Raft) becomeCandidate() {
 	rf.currentTerm++
 	rf.votedFor = rf.me
 	rf.lastHeartbeat = time.Now()
+	rf.persist()
 }
 
 func (rf *Raft) becomeLeader() {

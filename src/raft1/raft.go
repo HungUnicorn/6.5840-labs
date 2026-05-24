@@ -54,7 +54,8 @@ type Raft struct {
 	nextLogIndexToSend     []int
 	highestReplicatedIndex []int
 
-	applyCh chan raftapi.ApplyMsg
+	applyCh   chan raftapi.ApplyMsg
+	applyCond *sync.Cond
 }
 
 // return currentTerm and whether this server
@@ -90,6 +91,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 
 	rf.logEntries = append(rf.logEntries, newLogEntry)
+	rf.persist()
 
 	go rf.broadcastAppendEntries()
 
@@ -127,8 +129,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	// start ticker goroutine to start elections
+	rf.applyCond = sync.NewCond(&rf.mu)
+
 	go rf.ticker()
+	go rf.applier()
 
 	return rf
 }

@@ -139,7 +139,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.acknowledgeValidLeader(args.Term)
 	reply.Term = rf.currentTerm
 
-	if !rf.checkLogMatching(args, reply) {
+	if !rf.checkLogConsistency(args, reply) {
 		reply.Success = false
 		return
 	}
