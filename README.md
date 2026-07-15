@@ -9,6 +9,7 @@ This repository contains my personal implementations for the labs in [MIT's Grad
 | **1** | [MapReduce](https://pdos.csail.mit.edu/6.824/labs/lab-mr.html) | ✅ Complete | Fault tolerance, RPCs, Data Partitioning |
 | **2** | [Key/Value Server](https://pdos.csail.mit.edu/6.824/labs/lab-kvsrv1.html) | ✅ Complete | At-Most-Once, Ambiguity Resolution, Locking |
 | **3** | [Raft Consensus](https://pdos.csail.mit.edu/6.824/labs/lab-raft1.html) | ✅ Complete | Leader Election, Log Replication, Persistence, Snapshots |
+| **4** | [Fault-tolerant Key/Value Service](https://pdos.csail.mit.edu/6.824/labs/lab-kvraft1.html) | ⚠️ In Progress (4A Complete) | Replicated State Machine (RSM) |
 ---
 
 ## Lab 1: MapReduce
@@ -57,6 +58,19 @@ A long-running service cannot retain its entire log in memory forever. Raft coor
 
 * **Offset Architecture:** Decoupled the cluster's logical indices from the Go slice physical indices using a `snapshotIndex` offset mapping (`logical2Physical`).
 * **InstallSnapshot RPC:** The leader automatically identifies when a follower has fallen so far behind that the necessary logs have already been truncated, forcing synchronization via an `InstallSnapshot` RPC.
+
+---
+
+## Lab 4: Fault-tolerant Key/Value Service
+
+A fault-tolerant key/value storage service built on top of the Raft consensus engine.
+
+### Part 4A: Replicated State Machine (RSM)
+Decoupled the consensus layer from the application logic by implementing a generic Replicated State Machine wrapper.
+
+* **State Machine Interface**: Implemented the `DoOp` abstraction, allowing any deterministic state machine (like a simple counter or a KV store) to run over Raft.
+* **Concurrent Submission**: Used client-specific operation tracking and index mapping to manage multiple concurrent client requests safely.
+* **Reactive Aborts**: Client requests quickly fail with `ErrWrongLeader` on network partitions or term changes, prompting immediate leader rediscovery.
 
 ---
 

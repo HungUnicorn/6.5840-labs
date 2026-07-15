@@ -2,19 +2,24 @@ package rsm
 
 import (
 	"sync"
+	"time"
 
 	"6.5840/kvsrv1/rpc"
 	"6.5840/labrpc"
 	"6.5840/raft1"
 	"6.5840/raftapi"
 	"6.5840/tester1"
-
 )
 
 type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+	OriginServerId int
+	OperationId    int64
+	ClientRequest  any
+}
+
+type OperationResult struct {
+	OperationId     int64
+	ExecutionResult any
 }
 
 
@@ -37,7 +42,9 @@ type RSM struct {
 	applyCh      chan raftapi.ApplyMsg
 	maxraftstate int // snapshot if log grows this big
 	sm           StateMachine
-	// Your definitions here.
+	
+	operationIdCounter int64
+	pendingOperations  map[int]chan OperationResult
 }
 
 // servers[] contains the ports of the set of
@@ -57,14 +64,16 @@ type RSM struct {
 // any long-running work.
 func MakeRSM(servers []*labrpc.ClientEnd, me int, persister *tester.Persister, maxraftstate int, sm StateMachine) *RSM {
 	rsm := &RSM{
-		me:           me,
-		maxraftstate: maxraftstate,
-		applyCh:      make(chan raftapi.ApplyMsg),
-		sm:           sm,
+		me:                me,
+		maxraftstate:      maxraftstate,
+		applyCh:           make(chan raftapi.ApplyMsg),
+		sm:                sm,
+		pendingOperations: make(map[int]chan OperationResult),
 	}
 	if !tester.UseRaftStateMachine {
 		rsm.rf = raft.Make(servers, me, persister, rsm.applyCh)
 	}
+	go rsm.run()
 	return rsm
 }
 
@@ -72,16 +81,88 @@ func (rsm *RSM) Raft() raftapi.Raft {
 	return rsm.rf
 }
 
+func (rsm *RSM) run() {
+	for msg := range rsm.applyCh {
+		if msg.CommandValid {
+			op, ok := msg.Command.(Op)
+			if !ok {
+				continue
+			}
+
+			executionResult := rsm.sm.DoOp(op.ClientRequest)
+
+			rsm.mu.Lock()
+			ch, exists := rsm.pendingOperations[msg.CommandIndex]
+			rsm.mu.Unlock()
+
+			if exists {
+				ch <- OperationResult{
+					OperationId:     op.OperationId,
+					ExecutionResult: executionResult,
+				}
+			}
+		}
+	}
+
+	// Cleanup on shutdown (applyCh closed)
+	rsm.mu.Lock()
+	for _, ch := range rsm.pendingOperations {
+		close(ch)
+	}
+	rsm.mu.Unlock()
+}
+
 
 // Submit a command to Raft, and wait for it to be committed.  It
 // should return ErrWrongLeader if client should find new leader and
 // try again.
 func (rsm *RSM) Submit(req any) (rpc.Err, any) {
+	rsm.mu.Lock()
+	rsm.operationIdCounter++
+	operationId := rsm.operationIdCounter
+	rsm.mu.Unlock()
 
-	// Submit creates an Op structure to run a command through Raft;
-	// for example: op := Op{Me: rsm.me, Id: id, Req: req}, where req
-	// is the argument to Submit and id is a unique id for the op.
+	op := Op{
+		OriginServerId: rsm.me,
+		OperationId:    operationId,
+		ClientRequest:  req,
+	}
 
-	// your code here
-	return rpc.ErrWrongLeader, nil // i'm dead, try another server.
+	index, term, isLeader := rsm.rf.Start(op)
+	if !isLeader {
+		return rpc.ErrWrongLeader, nil
+	}
+
+	rsm.mu.Lock()
+	ch := make(chan OperationResult, 1)
+	rsm.pendingOperations[index] = ch
+	rsm.mu.Unlock()
+
+	defer func() {
+		rsm.mu.Lock()
+		delete(rsm.pendingOperations, index)
+		rsm.mu.Unlock()
+	}()
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case result, ok := <-ch:
+			if !ok {
+				// Server was shutdown/killed, pending channels closed
+				return rpc.ErrWrongLeader, nil
+			}
+			if result.OperationId == operationId {
+				return rpc.OK, result.ExecutionResult
+			}
+			return rpc.ErrWrongLeader, nil
+		case <-ticker.C:
+			currentTerm, isLeader := rsm.rf.GetState()
+			if !isLeader || currentTerm != term {
+				return rpc.ErrWrongLeader, nil
+			}
+		}
+	}
 }
