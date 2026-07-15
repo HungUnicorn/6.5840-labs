@@ -1,6 +1,8 @@
 package kvraft
 
 import (
+	"sync"
+
 	"6.5840/kvsrv1/rpc"
 	"6.5840/kvtest1"
 	"6.5840/tester1"
@@ -10,17 +12,23 @@ import (
 type Clerk struct {
 	clnt    *tester.Clnt
 	servers []string
-	leader int // last successful leader (index into servers[])
-	// You can add to this struct.
+	leader  int // last successful leader (index into servers[])
+	
+	mu      sync.Mutex
 }
 
 func MakeClerk(clnt *tester.Clnt, servers []string) kvtest.IKVClerk {
-	ck := &Clerk{clnt: clnt, servers: servers}
-	// You'll have to add code here.
+	ck := &Clerk{
+		clnt:    clnt,
+		servers: servers,
+		leader:  0,
+	}
 	return ck
 }
 
 func (ck *Clerk) Leader() int {
+	ck.mu.Lock()
+	defer ck.mu.Unlock()
 	return ck.leader
 }
 
@@ -35,9 +43,25 @@ func (ck *Clerk) Leader() int {
 // must match the declared types of the RPC handler function's
 // arguments. Additionally, reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
+	args := rpc.GetArgs{Key: key}
+	for {
+		ck.mu.Lock()
+		leader := ck.leader
+		serverName := ck.servers[leader]
+		ck.mu.Unlock()
 
-	// You will have to modify this function.
-	return "", 0, ""
+		var reply rpc.GetReply
+		ok := ck.clnt.Call(serverName, "KVServer.Get", &args, &reply)
+		if ok {
+			if reply.Err == rpc.OK || reply.Err == rpc.ErrNoKey {
+				return reply.Value, reply.Version, reply.Err
+			}
+		}
+
+		ck.mu.Lock()
+		ck.leader = (ck.leader + 1) % len(ck.servers)
+		ck.mu.Unlock()
+	}
 }
 
 // Put updates key with value only if the version in the
@@ -58,6 +82,37 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 // must match the declared types of the RPC handler function's
 // arguments. Additionally, reply must be passed as a pointer.
 func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
-	// You will have to modify this function.
-	return ""
+	args := rpc.PutArgs{
+		Key:     key,
+		Value:   value,
+		Version: version,
+	}
+
+	firstAttempt := true
+	for {
+		ck.mu.Lock()
+		leader := ck.leader
+		serverName := ck.servers[leader]
+		ck.mu.Unlock()
+
+		var reply rpc.PutReply
+		ok := ck.clnt.Call(serverName, "KVServer.Put", &args, &reply)
+		if ok {
+			if reply.Err == rpc.OK {
+				return rpc.OK
+			}
+			if reply.Err == rpc.ErrVersion || reply.Err == rpc.ErrNoKey {
+				if firstAttempt {
+					return reply.Err
+				}
+				return rpc.ErrMaybe
+			}
+		} else {
+			firstAttempt = false
+		}
+
+		ck.mu.Lock()
+		ck.leader = (ck.leader + 1) % len(ck.servers)
+		ck.mu.Unlock()
+	}
 }

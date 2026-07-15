@@ -9,7 +9,7 @@ This repository contains my personal implementations for the labs in [MIT's Grad
 | **1** | [MapReduce](https://pdos.csail.mit.edu/6.824/labs/lab-mr.html) | ✅ Complete | Fault tolerance, RPCs, Data Partitioning |
 | **2** | [Key/Value Server](https://pdos.csail.mit.edu/6.824/labs/lab-kvsrv1.html) | ✅ Complete | At-Most-Once, Ambiguity Resolution, Locking |
 | **3** | [Raft Consensus](https://pdos.csail.mit.edu/6.824/labs/lab-raft1.html) | ✅ Complete | Leader Election, Log Replication, Persistence, Snapshots |
-| **4** | [Fault-tolerant Key/Value Service](https://pdos.csail.mit.edu/6.824/labs/lab-kvraft1.html) | ⚠️ In Progress (4A Complete) | Replicated State Machine (RSM) |
+| **4** | [Fault-tolerant Key/Value Service](https://pdos.csail.mit.edu/6.824/labs/lab-kvraft1.html) | ⚠️ In Progress (4B Complete) | Replicated State Machine (RSM), Caching, Ambiguity Resolution |
 ---
 
 ## Lab 1: MapReduce
@@ -71,6 +71,13 @@ Decoupled the consensus layer from the application logic by implementing a gener
 * **State Machine Interface**: Implemented the `DoOp` abstraction, allowing any deterministic state machine (like a simple counter or a KV store) to run over Raft.
 * **Concurrent Submission**: Used client-specific operation tracking and index mapping to manage multiple concurrent client requests safely.
 * **Reactive Aborts**: Client requests quickly fail with `ErrWrongLeader` on network partitions or term changes, prompting immediate leader rediscovery.
+
+### Part 4B: Key/Value Service without Snapshots
+Built a replicated, linearizable Key/Value database server cluster (`KVServer`) and a client Clerk on top of the RSM layer.
+
+* **Replicated DB Transitions**: Implemented versioned state transitions in `DoOp()`, allowing updates to replicate and execute consistently on all database copies.
+* **Clerk Leadership Caching**: Designed client routing with a cached leader pointer to route requests directly, falling back to sequential leader discovery only during failures.
+* **At-Most-Once Ambiguity Handling**: Engineered retransmission rules that identify lost network acknowledgments and report `ErrMaybe` to prevent duplicate executions.
 
 ---
 
