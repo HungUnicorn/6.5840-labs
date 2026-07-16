@@ -107,9 +107,9 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 				}
 				return rpc.ErrMaybe
 			}
-		} else {
-			firstAttempt = false
 		}
+
+		firstAttempt = false
 
 		ck.mu.Lock()
 		ck.leader = (ck.leader + 1) % len(ck.servers)

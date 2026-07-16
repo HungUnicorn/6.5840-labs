@@ -9,7 +9,7 @@ This repository contains my personal implementations for the labs in [MIT's Grad
 | **1** | [MapReduce](https://pdos.csail.mit.edu/6.824/labs/lab-mr.html) | ✅ Complete | Fault tolerance, RPCs, Data Partitioning |
 | **2** | [Key/Value Server](https://pdos.csail.mit.edu/6.824/labs/lab-kvsrv1.html) | ✅ Complete | At-Most-Once, Ambiguity Resolution, Locking |
 | **3** | [Raft Consensus](https://pdos.csail.mit.edu/6.824/labs/lab-raft1.html) | ✅ Complete | Leader Election, Log Replication, Persistence, Snapshots |
-| **4** | [Fault-tolerant Key/Value Service](https://pdos.csail.mit.edu/6.824/labs/lab-kvraft1.html) | ⚠️ In Progress (4B Complete) | Replicated State Machine (RSM), Caching, Ambiguity Resolution |
+| **4** | [Fault-tolerant Key/Value Service](https://pdos.csail.mit.edu/6.824/labs/lab-kvraft1.html) | ✅ Complete | Replicated State Machine (RSM), Caching, Ambiguity Resolution, Snapshots |
 ---
 
 ## Lab 1: MapReduce
@@ -78,6 +78,13 @@ Built a replicated, linearizable Key/Value database server cluster (`KVServer`) 
 * **Replicated DB Transitions**: Implemented versioned state transitions in `DoOp()`, allowing updates to replicate and execute consistently on all database copies.
 * **Clerk Leadership Caching**: Designed client routing with a cached leader pointer to route requests directly, falling back to sequential leader discovery only during failures.
 * **At-Most-Once Ambiguity Handling**: Engineered retransmission rules that identify lost network acknowledgments and report `ErrMaybe` to prevent duplicate executions.
+
+### Part 4C: Key/Value Service with Snapshots
+Enabled persistent log compaction using serialized state snapshots, preventing infinite log growth and enabling rapid node recovery.
+
+* **Durable Snapshots**: Implemented `Snapshot()` and `Restore()` in the database layer to serialize state into bytes for Raft storage.
+* **Auto-compaction**: Programmed the RSM to monitor log size (`rf.PersistBytes()`) and trigger snapshots automatically when it exceeds the state threshold.
+* **Ingest & Install Handling**: Handled incoming snapshot installations from the leader to bring disconnected or slow followers up to date instantly.
 
 ---
 

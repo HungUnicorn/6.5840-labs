@@ -1,6 +1,8 @@
 package kvraft
 
 import (
+	"bytes"
+	"log"
 	"sync"
 
 	"6.5840/kvraft1/rsm"
@@ -76,12 +78,32 @@ func (kv *KVServer) DoOp(req any) any {
 }
 
 func (kv *KVServer) Snapshot() []byte {
-	// Your code here
-	return nil
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	if err := e.Encode(kv.db); err != nil {
+		log.Fatalf("KVServer: failed to encode db: %v", err)
+	}
+	return w.Bytes()
 }
 
 func (kv *KVServer) Restore(data []byte) {
-	// Your code here
+	if len(data) == 0 {
+		return
+	}
+
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var db map[string]ValueVersion
+	if err := d.Decode(&db); err != nil {
+		log.Fatalf("KVServer: failed to decode db: %v", err)
+	}
+
+	kv.mu.Lock()
+	kv.db = db
+	kv.mu.Unlock()
 }
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {

@@ -73,6 +73,10 @@ func MakeRSM(servers []*labrpc.ClientEnd, me int, persister *tester.Persister, m
 	if !tester.UseRaftStateMachine {
 		rsm.rf = raft.Make(servers, me, persister, rsm.applyCh)
 	}
+	snapshot := persister.ReadSnapshot()
+	if len(snapshot) > 0 {
+		rsm.sm.Restore(snapshot)
+	}
 	go rsm.run()
 	return rsm
 }
@@ -84,27 +88,58 @@ func (rsm *RSM) Raft() raftapi.Raft {
 func (rsm *RSM) run() {
 	for msg := range rsm.applyCh {
 		if msg.CommandValid {
-			op, ok := msg.Command.(Op)
-			if !ok {
-				continue
-			}
-
-			executionResult := rsm.sm.DoOp(op.ClientRequest)
-
-			rsm.mu.Lock()
-			ch, exists := rsm.pendingOperations[msg.CommandIndex]
-			rsm.mu.Unlock()
-
-			if exists {
-				ch <- OperationResult{
-					OperationId:     op.OperationId,
-					ExecutionResult: executionResult,
-				}
-			}
+			rsm.handleCommand(msg)
+		} else if msg.SnapshotValid {
+			rsm.handleSnapshot(msg)
 		}
 	}
+	rsm.cleanupPendingOperations()
+}
 
-	// Cleanup on shutdown (applyCh closed)
+func (rsm *RSM) handleCommand(msg raftapi.ApplyMsg) {
+	op, ok := msg.Command.(Op)
+	if !ok {
+		return
+	}
+
+	executionResult := rsm.sm.DoOp(op.ClientRequest)
+
+	rsm.notifyWaitingClient(msg.CommandIndex, op.OperationId, executionResult)
+
+	if rsm.shouldTakeSnapshot() {
+		rsm.takeSnapshot(msg.CommandIndex)
+	}
+}
+
+func (rsm *RSM) notifyWaitingClient(index int, opId int64, result any) {
+	rsm.mu.Lock()
+	ch, exists := rsm.pendingOperations[index]
+	rsm.mu.Unlock()
+
+	if exists {
+		ch <- OperationResult{
+			OperationId:     opId,
+			ExecutionResult: result,
+		}
+	}
+}
+
+func (rsm *RSM) shouldTakeSnapshot() bool {
+	return rsm.maxraftstate != -1 && rsm.rf.PersistBytes() > rsm.maxraftstate
+}
+
+func (rsm *RSM) takeSnapshot(index int) {
+	snapshot := rsm.sm.Snapshot()
+	rsm.rf.Snapshot(index, snapshot)
+}
+
+func (rsm *RSM) handleSnapshot(msg raftapi.ApplyMsg) {
+	if len(msg.Snapshot) > 0 {
+		rsm.sm.Restore(msg.Snapshot)
+	}
+}
+
+func (rsm *RSM) cleanupPendingOperations() {
 	rsm.mu.Lock()
 	for _, ch := range rsm.pendingOperations {
 		close(ch)
