@@ -44,7 +44,7 @@ func (sck *ShardCtrler) InitController() {
 // pick the key to name the configuration.  The initial configuration
 // lists shardgrp shardcfg.Gid1 for all shards.
 func (sck *ShardCtrler) InitConfig(cfg *shardcfg.ShardConfig) {
-	// Your code here
+	sck.IKVClerk.Put("config", cfg.String(), 0)
 }
 
 // Called by the tester to ask the controller to change the
@@ -58,7 +58,10 @@ func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
 
 // Return the current configuration
 func (sck *ShardCtrler) Query() *shardcfg.ShardConfig {
-	// Your code here.
-	return nil
+	s, _, _ := sck.IKVClerk.Get("config")
+	if s == "" {
+		return nil
+	}
+	return shardcfg.FromString(s)
 }
 
