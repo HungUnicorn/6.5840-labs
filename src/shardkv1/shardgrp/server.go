@@ -2,10 +2,15 @@ package shardgrp
 
 import (
 
+	"bytes"
+	"log"
+	"sync"
+
 	"6.5840/kvraft1/rsm"
 	"6.5840/kvsrv1/rpc"
 	"6.5840/labgob"
 	"6.5840/labrpc"
+	"6.5840/shardkv1/shardcfg"
 	"6.5840/shardkv1/shardgrp/shardrpc"
 	"6.5840/tester1"
 )
@@ -15,36 +20,134 @@ const (
 )
 
 
+type ValueVersion struct {
+	Value   string
+	Version rpc.Tversion
+}
+
 type KVServer struct {
 	me  int
 	rsm *rsm.RSM
 	gid tester.Tgid
 
-	// Your code here
+	mu          sync.Mutex
+	db          map[string]ValueVersion
+	ownedShards map[shardcfg.Tshid]bool
 }
 
 
 func (kv *KVServer) DoOp(req any) any {
-	// Your code here
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	switch args := req.(type) {
+	case rpc.GetArgs:
+		var reply rpc.GetReply
+		shard := shardcfg.Key2Shard(args.Key)
+		if !kv.ownedShards[shard] {
+			reply.Err = rpc.ErrWrongGroup
+			return reply
+		}
+
+		valVer, exists := kv.db[args.Key]
+		if exists {
+			reply.Value = valVer.Value
+			reply.Version = valVer.Version
+			reply.Err = rpc.OK
+		} else {
+			reply.Err = rpc.ErrNoKey
+		}
+		return reply
+
+	case rpc.PutArgs:
+		var reply rpc.PutReply
+		shard := shardcfg.Key2Shard(args.Key)
+		if !kv.ownedShards[shard] {
+			reply.Err = rpc.ErrWrongGroup
+			return reply
+		}
+
+		valVer, exists := kv.db[args.Key]
+		if !exists {
+			if args.Version != 0 {
+				reply.Err = rpc.ErrNoKey
+			} else {
+				kv.db[args.Key] = ValueVersion{
+					Value:   args.Value,
+					Version: 1,
+				}
+				reply.Err = rpc.OK
+			}
+		} else {
+			if args.Version != valVer.Version {
+				reply.Err = rpc.ErrVersion
+			} else {
+				kv.db[args.Key] = ValueVersion{
+					Value:   args.Value,
+					Version: valVer.Version + 1,
+				}
+				reply.Err = rpc.OK
+			}
+		}
+		return reply
+	}
+
 	return nil
 }
 
-
 func (kv *KVServer) Snapshot() []byte {
-	// Your code here
-	return nil
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	if err := e.Encode(kv.db); err != nil {
+		log.Fatalf("KVServer: failed to encode db: %v", err)
+	}
+	if err := e.Encode(kv.ownedShards); err != nil {
+		log.Fatalf("KVServer: failed to encode ownedShards: %v", err)
+	}
+	return w.Bytes()
 }
 
 func (kv *KVServer) Restore(data []byte) {
-	// Your code here
+	if len(data) == 0 {
+		return
+	}
+
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var db map[string]ValueVersion
+	var ownedShards map[shardcfg.Tshid]bool
+	if err := d.Decode(&db); err != nil {
+		log.Fatalf("KVServer: failed to decode db: %v", err)
+	}
+	if err := d.Decode(&ownedShards); err != nil {
+		log.Fatalf("KVServer: failed to decode ownedShards: %v", err)
+	}
+
+	kv.mu.Lock()
+	kv.db = db
+	kv.ownedShards = ownedShards
+	kv.mu.Unlock()
 }
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
-	// Your code here
+	err, rep := kv.rsm.Submit(*args)
+	if err != rpc.OK {
+		reply.Err = err
+		return
+	}
+	*reply = rep.(rpc.GetReply)
 }
 
 func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
-	// Your code here
+	err, rep := kv.rsm.Submit(*args)
+	if err != rpc.OK {
+		reply.Err = err
+		return
+	}
+	*reply = rep.(rpc.PutReply)
 }
 
 // Freeze the specified shard (i.e., reject future Get/Puts for this
@@ -78,9 +181,15 @@ func StartServerShardGrp(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, p
 	labgob.Register(rsm.Op{})
 
 	kv := &KVServer{gid: gid, me: me}
-	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
+	kv.db = make(map[string]ValueVersion)
+	kv.ownedShards = make(map[shardcfg.Tshid]bool)
+	if gid == shardcfg.Gid1 {
+		for i := shardcfg.Tshid(0); i < shardcfg.NShards; i++ {
+			kv.ownedShards[i] = true
+		}
+	}
 
-	// Your code here
+	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
 
 	return []any{kv, kv.rsm.Raft()}
 }

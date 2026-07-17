@@ -9,6 +9,9 @@ package shardkv
 //
 
 import (
+	"sync"
+
+	"6.5840/shardkv1/shardcfg"
 	"6.5840/shardkv1/shardgrp"
 
 	"6.5840/kvsrv1/rpc"
@@ -20,8 +23,8 @@ import (
 type Clerk struct {
 	clnt *tester.Clnt
 	sck  *shardctrler.ShardCtrler
-	rcks   map[tester.Tgid]*shardgrp.Clerk
-	// You will have to modify this struct.
+	rcks map[tester.Tgid]*shardgrp.Clerk
+	mu   sync.Mutex
 }
 
 // The tester calls MakeClerk and passes in a shardctrler so that
@@ -37,6 +40,8 @@ func MakeClerk(clnt *tester.Clnt, sck *shardctrler.ShardCtrler) kvtest.IKVClerk 
 }
 
 func (ck *Clerk) GetClerk(gid tester.Tgid) (*shardgrp.Clerk, bool) {
+	ck.mu.Lock()
+	defer ck.mu.Unlock()
 	rck, ok := ck.rcks[gid]
 	return rck, ok
 }
@@ -48,12 +53,46 @@ func (ck *Clerk) GetClerk(gid tester.Tgid) (*shardgrp.Clerk, bool) {
 // responsible for key.  You can make a clerk for that group by
 // calling shardgrp.MakeClerk(ck.clnt, servers).
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
-	// You will have to modify this function.
-	return "", 0, ""
+	shard := shardcfg.Key2Shard(key)
+	cfg := ck.sck.Query()
+	if cfg == nil {
+		return "", 0, rpc.ErrMaybe
+	}
+	gid, servers, ok := cfg.GidServers(shard)
+	if !ok {
+		return "", 0, rpc.ErrMaybe
+	}
+
+	rck, ok := ck.GetClerk(gid)
+	if !ok {
+		rck = shardgrp.MakeClerk(ck.clnt, servers)
+		ck.mu.Lock()
+		ck.rcks[gid] = rck
+		ck.mu.Unlock()
+	}
+
+	return rck.Get(key)
 }
 
 // Put a key to a shard group.
 func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
-	// You will have to modify this function.
-	return ""
+	shard := shardcfg.Key2Shard(key)
+	cfg := ck.sck.Query()
+	if cfg == nil {
+		return rpc.ErrMaybe
+	}
+	gid, servers, ok := cfg.GidServers(shard)
+	if !ok {
+		return rpc.ErrMaybe
+	}
+
+	rck, ok := ck.GetClerk(gid)
+	if !ok {
+		rck = shardgrp.MakeClerk(ck.clnt, servers)
+		ck.mu.Lock()
+		ck.rcks[gid] = rck
+		ck.mu.Unlock()
+	}
+
+	return rck.Put(key, value, version)
 }
