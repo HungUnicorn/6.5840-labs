@@ -10,6 +10,7 @@ package shardkv
 
 import (
 	"sync"
+	"time"
 
 	"6.5840/shardkv1/shardcfg"
 	"6.5840/shardkv1/shardgrp"
@@ -54,45 +55,63 @@ func (ck *Clerk) GetClerk(gid tester.Tgid) (*shardgrp.Clerk, bool) {
 // calling shardgrp.MakeClerk(ck.clnt, servers).
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	shard := shardcfg.Key2Shard(key)
-	cfg := ck.sck.Query()
-	if cfg == nil {
-		return "", 0, rpc.ErrMaybe
-	}
-	gid, servers, ok := cfg.GidServers(shard)
-	if !ok {
-		return "", 0, rpc.ErrMaybe
-	}
+	for {
+		cfg := ck.sck.Query()
+		if cfg == nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		gid, servers, ok := cfg.GidServers(shard)
+		if !ok {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
 
-	rck, ok := ck.GetClerk(gid)
-	if !ok {
-		rck = shardgrp.MakeClerk(ck.clnt, servers)
-		ck.mu.Lock()
-		ck.rcks[gid] = rck
-		ck.mu.Unlock()
-	}
+		rck, ok := ck.GetClerk(gid)
+		if !ok {
+			rck = shardgrp.MakeClerk(ck.clnt, servers)
+			ck.mu.Lock()
+			ck.rcks[gid] = rck
+			ck.mu.Unlock()
+		}
 
-	return rck.Get(key)
+		val, ver, err := rck.Get(key)
+		if err == rpc.ErrWrongGroup {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		return val, ver, err
+	}
 }
 
 // Put a key to a shard group.
 func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	shard := shardcfg.Key2Shard(key)
-	cfg := ck.sck.Query()
-	if cfg == nil {
-		return rpc.ErrMaybe
-	}
-	gid, servers, ok := cfg.GidServers(shard)
-	if !ok {
-		return rpc.ErrMaybe
-	}
+	for {
+		cfg := ck.sck.Query()
+		if cfg == nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		gid, servers, ok := cfg.GidServers(shard)
+		if !ok {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
 
-	rck, ok := ck.GetClerk(gid)
-	if !ok {
-		rck = shardgrp.MakeClerk(ck.clnt, servers)
-		ck.mu.Lock()
-		ck.rcks[gid] = rck
-		ck.mu.Unlock()
-	}
+		rck, ok := ck.GetClerk(gid)
+		if !ok {
+			rck = shardgrp.MakeClerk(ck.clnt, servers)
+			ck.mu.Lock()
+			ck.rcks[gid] = rck
+			ck.mu.Unlock()
+		}
 
-	return rck.Put(key, value, version)
+		err := rck.Put(key, value, version)
+		if err == rpc.ErrWrongGroup {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		return err
+	}
 }

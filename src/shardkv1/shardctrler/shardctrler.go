@@ -7,8 +7,10 @@ package shardctrler
 import (
 
 	"6.5840/kvsrv1"
+	"6.5840/kvsrv1/rpc"
 	"6.5840/kvtest1"
 	"6.5840/shardkv1/shardcfg"
+	"6.5840/shardkv1/shardgrp"
 	"6.5840/tester1"
 )
 
@@ -52,7 +54,30 @@ func (sck *ShardCtrler) InitConfig(cfg *shardcfg.ShardConfig) {
 // changes the configuration it may be superseded by another
 // controller.
 func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
-	// Your code here.
+	s, ver, _ := sck.IKVClerk.Get("config")
+	if s == "" {
+		return
+	}
+	old := shardcfg.FromString(s)
+	if new.Num <= old.Num {
+		return
+	}
+
+	for s := 0; s < shardcfg.NShards; s++ {
+		oldGid := old.Shards[s]
+		newGid := new.Shards[s]
+		if oldGid != newGid && oldGid != 0 && newGid != 0 {
+			oldCk := shardgrp.MakeClerk(sck.clnt, old.Groups[oldGid])
+			newCk := shardgrp.MakeClerk(sck.clnt, new.Groups[newGid])
+			
+			state, err := oldCk.FreezeShard(shardcfg.Tshid(s), new.Num)
+			if err == rpc.OK {
+				newCk.InstallShard(shardcfg.Tshid(s), state, new.Num)
+				oldCk.DeleteShard(shardcfg.Tshid(s), new.Num)
+			}
+		}
+	}
+	sck.IKVClerk.Put("config", new.String(), ver)
 }
 
 

@@ -33,6 +33,7 @@ type KVServer struct {
 	mu          sync.Mutex
 	db          map[string]ValueVersion
 	ownedShards map[shardcfg.Tshid]bool
+	shardNum    map[shardcfg.Tshid]shardcfg.Tnum
 }
 
 
@@ -90,6 +91,69 @@ func (kv *KVServer) DoOp(req any) any {
 			}
 		}
 		return reply
+	
+	case shardrpc.FreezeShardArgs:
+		var reply shardrpc.FreezeShardReply
+		if args.Num < kv.shardNum[args.Shard] {
+			reply.Err = rpc.OK
+			return reply
+		}
+		kv.shardNum[args.Shard] = args.Num
+
+		state := make(map[string]ValueVersion)
+		for k, v := range kv.db {
+			if shardcfg.Key2Shard(k) == args.Shard {
+				state[k] = v
+			}
+		}
+
+		delete(kv.ownedShards, args.Shard)
+
+		w := new(bytes.Buffer)
+		e := labgob.NewEncoder(w)
+		e.Encode(state)
+		reply.State = w.Bytes()
+		reply.Err = rpc.OK
+		return reply
+
+	case shardrpc.InstallShardArgs:
+		var reply shardrpc.InstallShardReply
+		if args.Num < kv.shardNum[args.Shard] {
+			reply.Err = rpc.OK
+			return reply
+		}
+		kv.shardNum[args.Shard] = args.Num
+
+		r := bytes.NewBuffer(args.State)
+		d := labgob.NewDecoder(r)
+		var state map[string]ValueVersion
+		d.Decode(&state)
+
+		for k, v := range state {
+			kv.db[k] = v
+		}
+
+		kv.ownedShards[args.Shard] = true
+		reply.Err = rpc.OK
+		return reply
+
+	case shardrpc.DeleteShardArgs:
+		var reply shardrpc.DeleteShardReply
+		if args.Num < kv.shardNum[args.Shard] {
+			reply.Err = rpc.OK
+			return reply
+		}
+		kv.shardNum[args.Shard] = args.Num
+
+		for k := range kv.db {
+			if shardcfg.Key2Shard(k) == args.Shard {
+				delete(kv.db, k)
+			}
+		}
+		delete(kv.ownedShards, args.Shard)
+
+		reply.Err = rpc.OK
+		return reply
 	}
 
 	return nil
@@ -107,6 +171,9 @@ func (kv *KVServer) Snapshot() []byte {
 	if err := e.Encode(kv.ownedShards); err != nil {
 		log.Fatalf("KVServer: failed to encode ownedShards: %v", err)
 	}
+	if err := e.Encode(kv.shardNum); err != nil {
+		log.Fatalf("KVServer: failed to encode shardNum: %v", err)
+	}
 	return w.Bytes()
 }
 
@@ -119,16 +186,21 @@ func (kv *KVServer) Restore(data []byte) {
 	d := labgob.NewDecoder(r)
 	var db map[string]ValueVersion
 	var ownedShards map[shardcfg.Tshid]bool
+	var shardNum map[shardcfg.Tshid]shardcfg.Tnum
 	if err := d.Decode(&db); err != nil {
 		log.Fatalf("KVServer: failed to decode db: %v", err)
 	}
 	if err := d.Decode(&ownedShards); err != nil {
 		log.Fatalf("KVServer: failed to decode ownedShards: %v", err)
 	}
+	if err := d.Decode(&shardNum); err != nil {
+		log.Fatalf("KVServer: failed to decode shardNum: %v", err)
+	}
 
 	kv.mu.Lock()
 	kv.db = db
 	kv.ownedShards = ownedShards
+	kv.shardNum = shardNum
 	kv.mu.Unlock()
 }
 
@@ -153,17 +225,32 @@ func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
 // Freeze the specified shard (i.e., reject future Get/Puts for this
 // shard) and return the key/values stored in that shard.
 func (kv *KVServer) FreezeShard(args *shardrpc.FreezeShardArgs, reply *shardrpc.FreezeShardReply) {
-	// Your code here
+	err, rep := kv.rsm.Submit(*args)
+	if err != rpc.OK {
+		reply.Err = err
+		return
+	}
+	*reply = rep.(shardrpc.FreezeShardReply)
 }
 
 // Install the supplied state for the specified shard.
 func (kv *KVServer) InstallShard(args *shardrpc.InstallShardArgs, reply *shardrpc.InstallShardReply) {
-	// Your code here
+	err, rep := kv.rsm.Submit(*args)
+	if err != rpc.OK {
+		reply.Err = err
+		return
+	}
+	*reply = rep.(shardrpc.InstallShardReply)
 }
 
 // Delete the specified shard.
 func (kv *KVServer) DeleteShard(args *shardrpc.DeleteShardArgs, reply *shardrpc.DeleteShardReply) {
-	// Your code here
+	err, rep := kv.rsm.Submit(*args)
+	if err != rpc.OK {
+		reply.Err = err
+		return
+	}
+	*reply = rep.(shardrpc.DeleteShardReply)
 }
 
 // StartShardServerGrp starts a server for shardgrp `gid`.
@@ -183,6 +270,7 @@ func StartServerShardGrp(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, p
 	kv := &KVServer{gid: gid, me: me}
 	kv.db = make(map[string]ValueVersion)
 	kv.ownedShards = make(map[shardcfg.Tshid]bool)
+	kv.shardNum = make(map[shardcfg.Tshid]shardcfg.Tnum)
 	if gid == shardcfg.Gid1 {
 		for i := shardcfg.Tshid(0); i < shardcfg.NShards; i++ {
 			kv.ownedShards[i] = true

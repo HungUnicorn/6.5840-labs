@@ -5,6 +5,7 @@ import (
 
 	"6.5840/kvsrv1/rpc"
 	"6.5840/shardkv1/shardcfg"
+	"6.5840/shardkv1/shardgrp/shardrpc"
 	"6.5840/tester1"
 )
 
@@ -85,16 +86,61 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 }
 
 func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.Err) {
-	// Your code here
-	return nil, ""
+	args := shardrpc.FreezeShardArgs{Shard: s, Num: num}
+	for {
+		ck.mu.Lock()
+		leader := ck.leader
+		serverName := ck.servers[leader]
+		ck.mu.Unlock()
+
+		var reply shardrpc.FreezeShardReply
+		ok := ck.Clnt.Call(serverName, "KVServer.FreezeShard", &args, &reply)
+		if ok && reply.Err != rpc.ErrWrongLeader && reply.Err != "" {
+			return reply.State, reply.Err
+		}
+
+		ck.mu.Lock()
+		ck.leader = (ck.leader + 1) % len(ck.servers)
+		ck.mu.Unlock()
+	}
 }
 
 func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum) rpc.Err {
-	// Your code here
-	return ""
+	args := shardrpc.InstallShardArgs{Shard: s, State: state, Num: num}
+	for {
+		ck.mu.Lock()
+		leader := ck.leader
+		serverName := ck.servers[leader]
+		ck.mu.Unlock()
+
+		var reply shardrpc.InstallShardReply
+		ok := ck.Clnt.Call(serverName, "KVServer.InstallShard", &args, &reply)
+		if ok && reply.Err != rpc.ErrWrongLeader && reply.Err != "" {
+			return reply.Err
+		}
+
+		ck.mu.Lock()
+		ck.leader = (ck.leader + 1) % len(ck.servers)
+		ck.mu.Unlock()
+	}
 }
 
 func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
-	// Your code here
-	return ""
+	args := shardrpc.DeleteShardArgs{Shard: s, Num: num}
+	for {
+		ck.mu.Lock()
+		leader := ck.leader
+		serverName := ck.servers[leader]
+		ck.mu.Unlock()
+
+		var reply shardrpc.DeleteShardReply
+		ok := ck.Clnt.Call(serverName, "KVServer.DeleteShard", &args, &reply)
+		if ok && reply.Err != rpc.ErrWrongLeader && reply.Err != "" {
+			return reply.Err
+		}
+
+		ck.mu.Lock()
+		ck.leader = (ck.leader + 1) % len(ck.servers)
+		ck.mu.Unlock()
+	}
 }
