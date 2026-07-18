@@ -10,6 +10,7 @@ This repository contains my personal implementations for the labs in [MIT's Grad
 | **2** | [Key/Value Server](https://pdos.csail.mit.edu/6.824/labs/lab-kvsrv1.html) | ✅ Complete | At-Most-Once, Ambiguity Resolution, Locking |
 | **3** | [Raft Consensus](https://pdos.csail.mit.edu/6.824/labs/lab-raft1.html) | ✅ Complete | Leader Election, Log Replication, Persistence, Snapshots |
 | **4** | [Fault-tolerant Key/Value Service](https://pdos.csail.mit.edu/6.824/labs/lab-kvraft1.html) | ✅ Complete | Replicated State Machine (RSM), Caching, Ambiguity Resolution, Snapshots |
+| **5** | [Sharded Key/Value Service](https://pdos.csail.mit.edu/6.824/labs/lab-shard.html) | 🟡 In Progress | Sharding, Configuration Management, Data Migration |
 ---
 
 ## Lab 1: MapReduce
@@ -85,6 +86,19 @@ Enabled persistent log compaction using serialized state snapshots, preventing i
 * **Durable Snapshots**: Implemented `Snapshot()` and `Restore()` in the database layer to serialize state into bytes for Raft storage.
 * **Auto-compaction**: Programmed the RSM to monitor log size (`rf.PersistBytes()`) and trigger snapshots automatically when it exceeds the state threshold.
 * **Ingest & Install Handling**: Handled incoming snapshot installations from the leader to bring disconnected or slow followers up to date instantly.
+
+---
+
+## Lab 5: Sharded Key/Value Service
+
+A scalable sharded key/value database where the keyspace is partitioned across multiple Raft replica groups to increase throughput and storage capacity.
+
+### Part 5A: The Shard Controller and Static Sharding
+Implemented the central coordination system to manage the assignment of shards to replica groups.
+
+* **Shard Controller Orchestration:** Built the `shardctrler` using a Raft-backed kvsrv to maintain a strictly linearizable sequence of configuration changes. When new server groups join or leave, it automatically executes a greedy load-balancing algorithm to seamlessly reassign shards.
+* **Deterministic Routing & Retries:** Programmed the client to deterministically route keys to specific server groups based on the active `ShardConfig`. Implemented transparent retry logic when encountering `ErrWrongGroup` to handle requests sent during a configuration shift.
+* **Live State Migration:** Orchestrated the movement of live data across server groups using `FreezeShard`, `InstallShard`, and `DeleteShard` RPCs. This strictly ensures no operations are processed on stale data during the transition, maintaining perfect linearizability.
 
 ---
 

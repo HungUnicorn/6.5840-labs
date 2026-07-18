@@ -2,6 +2,7 @@ package shardgrp
 
 import (
 	"sync"
+	"time"
 
 	"6.5840/kvsrv1/rpc"
 	"6.5840/shardkv1/shardcfg"
@@ -46,6 +47,8 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 		ck.mu.Lock()
 		ck.leader = (ck.leader + 1) % len(ck.servers)
 		ck.mu.Unlock()
+
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -82,6 +85,8 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 		ck.mu.Lock()
 		ck.leader = (ck.leader + 1) % len(ck.servers)
 		ck.mu.Unlock()
+
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -102,6 +107,8 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 		ck.mu.Lock()
 		ck.leader = (ck.leader + 1) % len(ck.servers)
 		ck.mu.Unlock()
+
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -122,6 +129,8 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 		ck.mu.Lock()
 		ck.leader = (ck.leader + 1) % len(ck.servers)
 		ck.mu.Unlock()
+
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -142,5 +151,7 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 		ck.mu.Lock()
 		ck.leader = (ck.leader + 1) % len(ck.servers)
 		ck.mu.Unlock()
+
+		time.Sleep(10 * time.Millisecond)
 	}
 }

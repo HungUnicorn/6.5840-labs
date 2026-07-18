@@ -83,10 +83,10 @@ func analyze(c *ShardConfig) (tester.Tgid, int, tester.Tgid, int) {
 		counts[g] += 1
 	}
 
-	mn := -1
-	var mg tester.Tgid = -1
-	ln := 257
-	var lg tester.Tgid = -1
+	maxLoadCount := -1
+	var maxLoadGroup tester.Tgid = -1
+	minLoadCount := 257
+	var minLoadGroup tester.Tgid = -1
 	// Enforce deterministic ordering, map iteration
 	// is randomized in go
 	groups := make([]tester.Tgid, len(c.Groups))
@@ -97,24 +97,24 @@ func analyze(c *ShardConfig) (tester.Tgid, int, tester.Tgid, int) {
 	}
 	slices.Sort(groups)
 	for _, g := range groups {
-		if counts[g] < ln {
-			ln = counts[g]
-			lg = g
+		if counts[g] < minLoadCount {
+			minLoadCount = counts[g]
+			minLoadGroup = g
 		}
-		if counts[g] > mn {
-			mn = counts[g]
-			mg = g
+		if counts[g] > maxLoadCount {
+			maxLoadCount = counts[g]
+			maxLoadGroup = g
 		}
 	}
 
-	return mg, mn, lg, ln
+	return maxLoadGroup, maxLoadCount, minLoadGroup, minLoadCount
 }
 
 // return GID of group with least number of
 // assigned shards.
 func least(c *ShardConfig) tester.Tgid {
-	_, _, lg, _ := analyze(c)
-	return lg
+	_, _, minLoadGroup, _ := analyze(c)
+	return minLoadGroup
 }
 
 // balance assignment of shards to groups.
@@ -132,21 +132,21 @@ func (c *ShardConfig) Rebalance() {
 	for s, g := range c.Shards {
 		_, ok := c.Groups[g]
 		if ok == false {
-			lg := least(c)
-			c.Shards[s] = lg
+			minLoadGroup := least(c)
+			c.Shards[s] = minLoadGroup
 		}
 	}
 
 	// move shards from most to least heavily loaded
 	for {
-		mg, mn, lg, ln := analyze(c)
-		if mn < ln+2 {
+		maxLoadGroup, maxLoadCount, minLoadGroup, minLoadCount := analyze(c)
+		if maxLoadCount < minLoadCount+2 {
 			break
 		}
-		// move 1 shard from mg to lg
+		// move 1 shard from maxLoadGroup to minLoadGroup
 		for s, g := range c.Shards {
-			if g == mg {
-				c.Shards[s] = lg
+			if g == maxLoadGroup {
+				c.Shards[s] = minLoadGroup
 				break
 			}
 		}
