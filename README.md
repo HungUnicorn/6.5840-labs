@@ -100,6 +100,12 @@ Implemented the central coordination system to manage the assignment of shards t
 * **Deterministic Routing & Retries:** Programmed the client to deterministically route keys to specific server groups based on the active `ShardConfig`. Implemented transparent retry logic when encountering `ErrWrongGroup` to handle requests sent during a configuration shift.
 * **Live State Migration:** Orchestrated the movement of live data across server groups using `FreezeShard`, `InstallShard`, and `DeleteShard` RPCs. This strictly ensures no operations are processed on stale data during the transition, maintaining perfect linearizability.
 
+### Part 5B: Handling a failed controller
+Made the shard controller fault-tolerant during complex reconfiguration sequences.
+
+* **Crash Recovery Logic:** Implemented two-phase commit-like persistence in the controller to survive sudden network loss or node failures during shard migration. The controller saves a target `next_config` before initiating remote `FreezeShard` and `InstallShard` operations.
+* **Idempotent Retries:** Developed the `InitController` recovery routine that automatically inspects the internal Key/Value store upon restart, detects interrupted migrations (by comparing current configuration number against the target), and idempotently completes the shard moves without affecting data integrity.
+
 ---
 
 ## 🧪 Testing
