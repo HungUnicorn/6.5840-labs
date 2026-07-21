@@ -106,6 +106,13 @@ Made the shard controller fault-tolerant during complex reconfiguration sequence
 * **Crash Recovery Logic:** Implemented two-phase commit-like persistence in the controller to survive sudden network loss or node failures during shard migration. The controller saves a target `next_config` before initiating remote `FreezeShard` and `InstallShard` operations.
 * **Idempotent Retries:** Developed the `InitController` recovery routine that automatically inspects the internal Key/Value store upon restart, detects interrupted migrations (by comparing current configuration number against the target), and idempotently completes the shard moves without affecting data integrity.
 
+### Part 5C: Concurrent Configuration Changes
+Ensured correctness when multiple controllers run concurrently, preventing conflicting configuration transitions from corrupting the system.
+
+* **Per-Num Claim Keys:** Replaced the single shared `next_config` key with per-configuration-number keys (`next_config_<Num>`). Each controller attempts a versioned `Put` at version 0 (create-if-not-exists), which acts as a compare-and-swap: the first controller to create the key wins, and all others receive `ErrVersion` and back off.
+* **Ambiguous Write Confirmation:** Handled the `ErrMaybe` case from unreliable networks by re-reading the claimed key and verifying that the stored configuration matches the controller's own proposed config before proceeding with shard moves.
+* **Fenced Idempotency:** Leveraged the existing configuration `Num` fencing on all shard group RPCs (`FreezeShard`, `InstallShard`, `DeleteShard`) so that even if multiple controllers attempt the same migration, duplicate RPCs are safely rejected by the shard groups.
+
 ---
 
 ## 🧪 Testing

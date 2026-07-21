@@ -5,6 +5,7 @@ package shardctrler
 //
 
 import (
+	"fmt"
 
 	"6.5840/kvsrv1"
 	"6.5840/kvsrv1/rpc"
@@ -14,15 +15,72 @@ import (
 	"6.5840/tester1"
 )
 
-
 // ShardCtrler for the controller and kv clerk.
 type ShardCtrler struct {
 	clnt *tester.Clnt
 	kvtest.IKVClerk
 
 	killed int32 // set by Kill()
+}
 
-	// Your data here.
+type claimResult int
+
+const (
+	claimed    claimResult = iota
+	notClaimed
+)
+
+type transferResult int
+
+const (
+	transferOK     transferResult = iota
+	transferFailed
+)
+
+func nextConfigKey(num shardcfg.Tnum) string {
+	return fmt.Sprintf("next_config_%d", num)
+}
+
+func (sck *ShardCtrler) tryClaimNextConfig(newConfig *shardcfg.ShardConfig) claimResult {
+	pendingConfigKey := nextConfigKey(newConfig.Num)
+	const createIfNotExists = rpc.Tversion(0)
+
+	err := sck.IKVClerk.Put(pendingConfigKey, newConfig.String(), createIfNotExists)
+	switch err {
+	case rpc.OK:
+		return claimed
+	case rpc.ErrMaybe:
+		return sck.confirmOwnWrite(pendingConfigKey, newConfig)
+	default:
+		return notClaimed
+	}
+}
+
+func (sck *ShardCtrler) confirmOwnWrite(key string, expected *shardcfg.ShardConfig) claimResult {
+	confirmedStr, _, _ := sck.IKVClerk.Get(key)
+	if confirmedStr == expected.String() {
+		return claimed
+	}
+	return notClaimed
+}
+
+func (sck *ShardCtrler) recoverPendingConfig(currentConfig *shardcfg.ShardConfig, currentConfigVer rpc.Tversion) {
+	pendingConfigKey := nextConfigKey(currentConfig.Num + 1)
+	pendingConfigStr, _, _ := sck.IKVClerk.Get(pendingConfigKey)
+	if pendingConfigStr == "" {
+		return
+	}
+	pendingConfig := shardcfg.FromString(pendingConfigStr)
+
+	configAlreadyApplied := pendingConfig.Num <= currentConfig.Num
+	if configAlreadyApplied {
+		return
+	}
+
+	if sck.moveShards(currentConfig, pendingConfig) != transferOK {
+		return
+	}
+	sck.IKVClerk.Put("config", pendingConfig.String(), currentConfigVer)
 }
 
 // Make a ShardCltler, which stores its state in a kvsrv.
@@ -30,58 +88,55 @@ func MakeShardCtrler(clnt *tester.Clnt) *ShardCtrler {
 	sck := &ShardCtrler{clnt: clnt}
 	srv := tester.ServerName(tester.GRP0, 0)
 	sck.IKVClerk = kvsrv.MakeClerk(clnt, srv)
-	// Your code here.
 	return sck
 }
 
-func (sck *ShardCtrler) moveShards(oldConfig, newConfig *shardcfg.ShardConfig) {
-	for shardID := 0; shardID < shardcfg.NShards; shardID++ {
-		oldGroup := oldConfig.Shards[shardID]
-		newGroup := newConfig.Shards[shardID]
-
-		isSameGroup := oldGroup == newGroup
-		isUnassignedOld := oldGroup == 0
-		isUnassignedNew := newGroup == 0
-
-		if isSameGroup || isUnassignedOld || isUnassignedNew {
-			continue
-		}
-
-		oldClient := shardgrp.MakeClerk(sck.clnt, oldConfig.Groups[oldGroup])
-		newClient := shardgrp.MakeClerk(sck.clnt, newConfig.Groups[newGroup])
-
-		state, err := oldClient.FreezeShard(shardcfg.Tshid(shardID), newConfig.Num)
-		if err != rpc.OK {
-			continue
-		}
-
-		newClient.InstallShard(shardcfg.Tshid(shardID), state, newConfig.Num)
-		oldClient.DeleteShard(shardcfg.Tshid(shardID), newConfig.Num)
-	}
+func needsMove(srcGroup, dstGroup tester.Tgid) bool {
+	isUnassigned := srcGroup == 0 || dstGroup == 0
+	return srcGroup != dstGroup && !isUnassigned
 }
 
-// The tester calls InitController() before starting a new
-// controller. In part A, this method doesn't need to do anything. In
-// B and C, this method implements recovery.
-func (sck *ShardCtrler) InitController() {
-	nextConfigStr, _, _ := sck.IKVClerk.Get("next_config")
-	if nextConfigStr == "" {
-		return
-	}
-	nextConfig := shardcfg.FromString(nextConfigStr)
+func (sck *ShardCtrler) moveShards(oldConfig, newConfig *shardcfg.ShardConfig) transferResult {
+	for shardID := 0; shardID < shardcfg.NShards; shardID++ {
+		srcGroup := oldConfig.Shards[shardID]
+		dstGroup := newConfig.Shards[shardID]
 
+		if !needsMove(srcGroup, dstGroup) {
+			continue
+		}
+
+		if sck.transferShard(shardcfg.Tshid(shardID), newConfig.Num, oldConfig, srcGroup, newConfig, dstGroup) != transferOK {
+			return transferFailed
+		}
+	}
+	return transferOK
+}
+
+func (sck *ShardCtrler) transferShard(shardID shardcfg.Tshid, configNum shardcfg.Tnum, oldConfig *shardcfg.ShardConfig, srcGroup tester.Tgid, newConfig *shardcfg.ShardConfig, dstGroup tester.Tgid) transferResult {
+	srcClerk := shardgrp.MakeClerk(sck.clnt, oldConfig.Groups[srcGroup])
+	dstClerk := shardgrp.MakeClerk(sck.clnt, newConfig.Groups[dstGroup])
+
+	state, err := srcClerk.FreezeShard(shardID, configNum)
+	if err != rpc.OK {
+		return transferFailed
+	}
+
+	err = dstClerk.InstallShard(shardID, state, configNum)
+	if err != rpc.OK {
+		return transferFailed
+	}
+
+	srcClerk.DeleteShard(shardID, configNum)
+	return transferOK
+}
+
+func (sck *ShardCtrler) InitController() {
 	currentConfigStr, currentConfigVer, _ := sck.IKVClerk.Get("config")
 	if currentConfigStr == "" {
 		return
 	}
 	currentConfig := shardcfg.FromString(currentConfigStr)
-
-	if nextConfig.Num <= currentConfig.Num {
-		return
-	}
-
-	sck.moveShards(currentConfig, nextConfig)
-	sck.IKVClerk.Put("config", nextConfig.String(), currentConfigVer)
+	sck.recoverPendingConfig(currentConfig, currentConfigVer)
 }
 
 // Called once by the tester to supply the first configuration.  You
@@ -93,10 +148,6 @@ func (sck *ShardCtrler) InitConfig(cfg *shardcfg.ShardConfig) {
 	sck.IKVClerk.Put("config", cfg.String(), 0)
 }
 
-// Called by the tester to ask the controller to change the
-// configuration from the current one to new.  While the controller
-// changes the configuration it may be superseded by another
-// controller.
 func (sck *ShardCtrler) ChangeConfigTo(newConfig *shardcfg.ShardConfig) {
 	currentConfigStr, currentConfigVer, _ := sck.IKVClerk.Get("config")
 	if currentConfigStr == "" {
@@ -104,24 +155,26 @@ func (sck *ShardCtrler) ChangeConfigTo(newConfig *shardcfg.ShardConfig) {
 	}
 	currentConfig := shardcfg.FromString(currentConfigStr)
 
-	if newConfig.Num <= currentConfig.Num {
+	configAlreadyApplied := newConfig.Num <= currentConfig.Num
+	if configAlreadyApplied {
 		return
 	}
 
-	_, nextConfigVer, _ := sck.IKVClerk.Get("next_config")
-	sck.IKVClerk.Put("next_config", newConfig.String(), nextConfigVer)
+	if sck.tryClaimNextConfig(newConfig) != claimed {
+		return
+	}
 
-	sck.moveShards(currentConfig, newConfig)
+	if sck.moveShards(currentConfig, newConfig) != transferOK {
+		return
+	}
 	sck.IKVClerk.Put("config", newConfig.String(), currentConfigVer)
 }
 
-
-// Return the current configuration
 func (sck *ShardCtrler) Query() *shardcfg.ShardConfig {
-	s, _, _ := sck.IKVClerk.Get("config")
-	if s == "" {
+	configStr, _, _ := sck.IKVClerk.Get("config")
+	if configStr == "" {
 		return nil
 	}
-	return shardcfg.FromString(s)
+	return shardcfg.FromString(configStr)
 }
 
