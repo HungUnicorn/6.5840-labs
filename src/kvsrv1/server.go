@@ -11,11 +11,10 @@ import (
 
 const Debug = false
 
-func DPrintf(format string, a ...interface{}) (n int, err error) {
+func DPrintf(format string, a ...interface{}) {
 	if Debug {
 		log.Printf(format, a...)
 	}
-	return
 }
 
 type ValueVersion struct {
@@ -39,13 +38,14 @@ func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	if valVer, exists := kv.db[args.Key]; exists {
-		reply.Value = valVer.Value
-		reply.Version = valVer.Version
-		reply.Err = rpc.OK
-	} else {
+	valVer, exists := kv.db[args.Key]
+	if !exists {
 		reply.Err = rpc.ErrNoKey
+		return
 	}
+	reply.Value = valVer.Value
+	reply.Version = valVer.Version
+	reply.Err = rpc.OK
 }
 
 func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {

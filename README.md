@@ -34,8 +34,9 @@ A distributed MapReduce system built in Go, modeled after the original Google ar
 A fault-tolerant Key/Value service and a distributed lock implementation designed to operate over an unreliable network.
 
 ### Key Components
-* **Ambiguity Resolution:** When a network drop occurs, the Clerk identifies "maybe" scenarios where a request might have succeeded on the server but the acknowledgment was lost.
-* **Distributed Lock:** A robust lock implementation using unique Owner IDs. It resolves state ambiguity by re-verifying the key value after an `ErrMaybe` response.
+* **At-Most-Once Semantics:** Implemented versioning (Compare-and-Swap) to prevent duplicate execution of retried RPCs on the server.
+* **Ambiguity Resolution:** When a network drop occurs, the Clerk identifies "maybe" scenarios (e.g., missed acknowledgments). It safely resolves this ambiguity by querying the server's state before retrying.
+* **Distributed Lock:** A linearizable spinlock using unique Owner IDs. It handles complex network edge cases, such as relying on server state mismatches to confirm successful but unacknowledged lock releases.
 
 ## Lab 3: Raft Consensus
 

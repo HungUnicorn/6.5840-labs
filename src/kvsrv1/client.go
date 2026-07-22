@@ -8,6 +8,8 @@ import (
 	"6.5840/tester1"
 )
 
+const retryInterval = 100 * time.Millisecond
+
 type Clerk struct {
 	clnt   *tester.Clnt
 	server string
@@ -29,7 +31,7 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 			return reply.Value, reply.Version, reply.Err
 		}
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(retryInterval)
 	}
 }
 
@@ -39,21 +41,21 @@ func (ck *Clerk) Put(key, value string, version rpc.Tversion) rpc.Err {
 		Value:   value,
 		Version: version,
 	}
-	isFirstAttempt := true
+	rpcMayHaveBeenDelivered := false
 
 	for {
 		reply := rpc.PutReply{}
 		ok := ck.clnt.Call(ck.server, "KVServer.Put", &args, &reply)
 
 		if ok {
-			if reply.Err == rpc.ErrVersion && !isFirstAttempt {
+			if reply.Err == rpc.ErrVersion && rpcMayHaveBeenDelivered {
 				return rpc.ErrMaybe
 			}
 			return reply.Err
 		}
 
-		isFirstAttempt = false
+		rpcMayHaveBeenDelivered = true
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(retryInterval)
 	}
 }

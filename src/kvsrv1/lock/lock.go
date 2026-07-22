@@ -12,6 +12,8 @@ import (
 const (
 	StateLocked   = "locked"
 	StateUnlocked = "unlocked"
+
+	retryInterval = 100 * time.Millisecond
 )
 
 type Lock struct {
@@ -48,7 +50,7 @@ func (lk *Lock) Acquire() {
 			return
 		}
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(retryInterval)
 	}
 }
 
@@ -60,16 +62,14 @@ func (lk *Lock) tryAcquire() bool {
 		return false
 	}
 
-	initialVersion := rpc.Tversion(0)
-	putVer := initialVersion
+	var putVer rpc.Tversion
 	if err == rpc.OK {
 		putVer = ver
 	}
 
 	putErr := lk.ck.Put(lk.name, lk.id, putVer)
 
-	isAcquireConfirmed := putErr == rpc.OK
-	if isAcquireConfirmed {
+	if putErr == rpc.OK {
 		return true
 	}
 
@@ -87,21 +87,17 @@ func (lk *Lock) Release() {
 	for {
 		val, ver, err := lk.ck.Get(lk.name)
 
-		isAlreadyUnlocked := err == rpc.OK && val == StateUnlocked
-		if isAlreadyUnlocked {
-			return
-		}
+		if err == rpc.OK {
+			unlockAlreadySucceeded := val != lk.id
+			if unlockAlreadySucceeded {
+				return
+			}
 
-		isOwner := err == rpc.OK && val == lk.id
-		if isOwner {
-			putErr := lk.ck.Put(lk.name, StateUnlocked, ver)
-
-			isReleaseConfirmed := putErr == rpc.OK
-			if isReleaseConfirmed {
+			if lk.ck.Put(lk.name, StateUnlocked, ver) == rpc.OK {
 				return
 			}
 		}
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(retryInterval)
 	}
 }
