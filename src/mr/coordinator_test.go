@@ -12,8 +12,8 @@ func TestGetTask_IdleMapTask_AssignsTaskAndSetsInProgress(t *testing.T) {
 
 	c.GetTask(&TaskRequest{}, &reply)
 
-	if reply.Phase != MapPhase {
-		t.Errorf("Expected MapPhase, got %v", reply.Phase)
+	if reply.Directive != DoMap {
+		t.Errorf("Expected DoMap, got %v", reply.Directive)
 	}
 	if reply.TaskId != 0 {
 		t.Errorf("Expected TaskId 0, got %v", reply.TaskId)
@@ -30,15 +30,15 @@ func TestGetTask_MismatchedCounts_AssignsCorrectIndices(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		reply := TaskResponse{}
 		c.GetTask(&TaskRequest{}, &reply)
-		if reply.Phase != MapPhase || reply.TaskId != i {
-			t.Errorf("Expected Map Task %v, got %v Phase %v", i, reply.TaskId, reply.Phase)
+		if reply.Directive != DoMap || reply.TaskId != i {
+			t.Errorf("Expected DoMap Task %v, got %v Directive %v", i, reply.TaskId, reply.Directive)
 		}
 	}
 
 	reply := TaskResponse{}
 	c.GetTask(&TaskRequest{}, &reply)
-	if reply.Phase != WaitPhase {
-		t.Errorf("Expected WaitPhase, got %v", reply.Phase)
+	if reply.Directive != Wait {
+		t.Errorf("Expected Wait, got %v", reply.Directive)
 	}
 }
 
@@ -56,7 +56,7 @@ func TestGetTask_MapTaskTimedOut_ReassignsToNewWorker(t *testing.T) {
 	reply2 := TaskResponse{}
 	c.GetTask(&TaskRequest{}, &reply2)
 
-	if reply2.TaskId != 0 || reply2.Phase != MapPhase {
+	if reply2.TaskId != 0 || reply2.Directive != DoMap {
 		t.Errorf("Failed to reassign timed-out task")
 	}
 }
@@ -78,7 +78,7 @@ func TestGetTask_ReduceTaskTimedOut_ReassignsToNewWorker(t *testing.T) {
 	reply2 := TaskResponse{}
 	c.GetTask(&TaskRequest{}, &reply2)
 
-	if reply2.TaskId != 0 || reply2.Phase != ReducePhase {
+	if reply2.TaskId != 0 || reply2.Directive != DoReduce {
 		t.Errorf("Failed to reassign timed-out reduce task")
 	}
 }
@@ -96,7 +96,7 @@ func TestReportTask_DuplicateMapReport_DoesNotTransitionPrematurely(t *testing.T
 	}
 }
 
-func TestReportTask_AllTasksFinished_TransitionsToExitPhase(t *testing.T) {
+func TestReportTask_AllTasksFinished_TransitionsToDonePhase(t *testing.T) {
 	files := []string{"f1.txt"}
 	c := initCoordinator("test-sock", files, 1)
 
@@ -110,8 +110,8 @@ func TestReportTask_AllTasksFinished_TransitionsToExitPhase(t *testing.T) {
 	c.reduceTasks[0].Status = InProgress
 	c.ReportTask(&ReportTaskRequest{Phase: ReducePhase, TaskId: 0}, &ReportTaskResponse{})
 
-	if c.phase != ExitPhase {
-		t.Errorf("Expected ExitPhase")
+	if c.phase != DonePhase {
+		t.Errorf("Expected DonePhase")
 	}
 
 	if !c.Done() {

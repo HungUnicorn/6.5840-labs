@@ -17,7 +17,11 @@ type KeyValue struct {
 	Value string
 }
 
-var coordSockName string
+type worker struct {
+	sockname string
+	mapf     func(string, string) []KeyValue
+	reducef  func(string, []string) string
+}
 
 // ihash determines the reduce task number for a given key.
 func ihash(key string) int {
@@ -31,19 +35,26 @@ func ihash(key string) int {
 // ---------------------------------------------------------
 
 func Worker(sockname string, mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
-	coordSockName = sockname
+	w := worker{
+		sockname: sockname,
+		mapf:     mapf,
+		reducef:  reducef,
+	}
+	w.run()
+}
 
+func (w *worker) run() {
 	for {
-		reply := CallGetTask()
+		reply := w.getTask()
 
-		switch reply.Phase {
-		case MapPhase:
-			executeMapTask(reply, mapf)
-		case ReducePhase:
-			executeReduceTask(reply, reducef)
-		case WaitPhase:
+		switch reply.Directive {
+		case DoMap:
+			w.executeMapTask(reply)
+		case DoReduce:
+			w.executeReduceTask(reply)
+		case Wait:
 			time.Sleep(1 * time.Second)
-		case ExitPhase:
+		case Exit:
 			os.Exit(0)
 		}
 	}
@@ -53,13 +64,13 @@ func Worker(sockname string, mapf func(string, string) []KeyValue, reducef func(
 // Phase Execution Logic
 // ---------------------------------------------------------
 
-func executeMapTask(reply TaskResponse, mapf func(string, string) []KeyValue) {
+func (w *worker) executeMapTask(reply TaskResponse) {
 	content, err := os.ReadFile(reply.FileName)
 	if err != nil {
 		log.Fatalf("Worker %v failed to read file %v: %v", os.Getpid(), reply.FileName, err)
 	}
 
-	kvArray := mapf(reply.FileName, string(content))
+	kvArray := w.mapf(reply.FileName, string(content))
 
 	encoders := make([]*json.Encoder, reply.NReduce)
 	tempFiles := make([]*os.File, reply.NReduce)
@@ -83,13 +94,15 @@ func executeMapTask(reply TaskResponse, mapf func(string, string) []KeyValue) {
 	for i := 0; i < reply.NReduce; i++ {
 		tempFiles[i].Close()
 		finalName := fmt.Sprintf("mr-%v-%v", reply.TaskId, i)
-		os.Rename(tempFiles[i].Name(), finalName)
+		if err := os.Rename(tempFiles[i].Name(), finalName); err != nil {
+			log.Fatalf("Failed to rename %s to %s: %v", tempFiles[i].Name(), finalName, err)
+		}
 	}
 
-	CallReportTask(reply.Phase, reply.TaskId)
+	w.reportTask(MapPhase, reply.TaskId)
 }
 
-func executeReduceTask(reply TaskResponse, reducef func(string, []string) string) {
+func (w *worker) executeReduceTask(reply TaskResponse) {
 	intermediate := gatherIntermediateData(reply.NMap, reply.TaskId)
 
 	sort.Slice(intermediate, func(i, j int) bool {
@@ -109,16 +122,19 @@ func executeReduceTask(reply TaskResponse, reducef func(string, []string) string
 		groupSlice := intermediate[i:groupEnd]
 		values := extractValues(groupSlice)
 
-		output := reducef(currentKey, values)
+		output := w.reducef(currentKey, values)
 		fmt.Fprintf(tempFile, "%v %v\n", currentKey, output)
 
 		i = groupEnd
 	}
 
 	tempFile.Close()
-	os.Rename(tempFile.Name(), fmt.Sprintf("mr-out-%v", reply.TaskId))
+	finalName := fmt.Sprintf("mr-out-%v", reply.TaskId)
+	if err := os.Rename(tempFile.Name(), finalName); err != nil {
+		log.Fatalf("Failed to rename %s to %s: %v", tempFile.Name(), finalName, err)
+	}
 
-	CallReportTask(reply.Phase, reply.TaskId)
+	w.reportTask(ReducePhase, reply.TaskId)
 }
 
 func gatherIntermediateData(nMap int, reduceTaskId int) []KeyValue {
@@ -177,11 +193,11 @@ func extractValues(group []KeyValue) []string {
 // RPC Networking
 // ---------------------------------------------------------
 
-func CallGetTask() TaskResponse {
+func (w *worker) getTask() TaskResponse {
 	args := TaskRequest{}
 	reply := TaskResponse{}
 
-	ok := call("Coordinator.GetTask", &args, &reply)
+	ok := w.call("Coordinator.GetTask", &args, &reply)
 	if !ok {
 		os.Exit(0) // Coordinator unreachable, safely assume job is done
 	}
@@ -189,16 +205,17 @@ func CallGetTask() TaskResponse {
 	return reply
 }
 
-func CallReportTask(phase TaskPhase, taskId int) {
+func (w *worker) reportTask(phase TaskPhase, taskId int) {
 	args := ReportTaskRequest{Phase: phase, TaskId: taskId}
 	reply := ReportTaskResponse{}
-	call("Coordinator.ReportTask", &args, &reply)
+	w.call("Coordinator.ReportTask", &args, &reply)
 }
 
-func call(rpcname string, args interface{}, reply interface{}) bool {
-	c, err := rpc.DialHTTP("unix", coordSockName)
+func (w *worker) call(rpcname string, args interface{}, reply interface{}) bool {
+	c, err := rpc.DialHTTP("unix", w.sockname)
 	if err != nil {
-		log.Fatal("dialing:", err)
+		log.Printf("dialing: %v", err)
+		return false
 	}
 	defer c.Close()
 

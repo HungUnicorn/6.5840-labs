@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"errors"
 	"log"
 	"net"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"sync"
 	"time"
 )
+
+var errNoAvailableTask = errors.New("no available task")
 
 const TaskTimeout = 10 * time.Second
 
@@ -43,18 +46,19 @@ func (c *Coordinator) GetTask(args *TaskRequest, reply *TaskResponse) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.phase == MapPhase && c.assignTask(c.mapTasks, MapPhase, reply) {
-		return nil
-	}
-
-	if c.phase == ReducePhase && c.assignTask(c.reduceTasks, ReducePhase, reply) {
-		return nil
-	}
-
-	if c.phase == ExitPhase {
-		reply.Phase = ExitPhase
-	} else {
-		reply.Phase = WaitPhase
+	switch c.phase {
+	case MapPhase:
+		if err := c.tryAssignAvailableTask(c.mapTasks, DoMap, reply); err == nil {
+			return nil
+		}
+		reply.Directive = Wait
+	case ReducePhase:
+		if err := c.tryAssignAvailableTask(c.reduceTasks, DoReduce, reply); err == nil {
+			return nil
+		}
+		reply.Directive = Wait
+	case DonePhase:
+		reply.Directive = Exit
 	}
 
 	return nil
@@ -81,7 +85,7 @@ func (c *Coordinator) ReportTask(args *ReportTaskRequest, reply *ReportTaskRespo
 // Private Helper Methods
 // ---------------------------------------------------------
 
-func (c *Coordinator) assignTask(tasks []Task, phase TaskPhase, reply *TaskResponse) bool {
+func (c *Coordinator) tryAssignAvailableTask(tasks []Task, directive WorkerDirective, reply *TaskResponse) error {
 	for i := range tasks {
 		task := &tasks[i]
 
@@ -92,16 +96,16 @@ func (c *Coordinator) assignTask(tasks []Task, phase TaskPhase, reply *TaskRespo
 			task.Status = InProgress
 			task.StartTime = time.Now()
 
-			reply.Phase = phase
+			reply.Directive = directive
 			reply.TaskId = i
 			reply.FileName = task.File
 			reply.NReduce = c.nReduce
 			reply.NMap = c.nMap
 
-			return true
+			return nil
 		}
 	}
-	return false
+	return errNoAvailableTask
 }
 
 func (c *Coordinator) markTaskCompleted(tasks []Task, taskId int) {
@@ -114,12 +118,21 @@ func (c *Coordinator) markTaskCompleted(tasks []Task, taskId int) {
 }
 
 func (c *Coordinator) checkPhaseTransition() {
-	if c.phase == MapPhase && c.isAllComplete(c.mapTasks) {
-		log.Println("All Map tasks complete. Transitioning to Reduce Phase.")
-		c.phase = ReducePhase
-	} else if c.phase == ReducePhase && c.isAllComplete(c.reduceTasks) {
-		log.Println("All Reduce tasks complete. Transitioning to Exit Phase.")
-		c.phase = ExitPhase
+	prev := c.phase
+
+	switch c.phase {
+	case MapPhase:
+		if c.isAllComplete(c.mapTasks) {
+			c.phase = ReducePhase
+		}
+	case ReducePhase:
+		if c.isAllComplete(c.reduceTasks) {
+			c.phase = DonePhase
+		}
+	}
+
+	if c.phase != prev {
+		log.Printf("All %v tasks complete. Transitioning to %v Phase.", prev, c.phase)
 	}
 }
 
@@ -150,7 +163,7 @@ func (c *Coordinator) server(sockname string) {
 func (c *Coordinator) Done() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.phase == ExitPhase
+	return c.phase == DonePhase
 }
 
 func initCoordinator(sockname string, files []string, nReduce int) *Coordinator {

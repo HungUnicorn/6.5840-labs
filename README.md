@@ -15,12 +15,17 @@ This repository contains my personal implementations for the labs in [MIT's Grad
 
 ## Lab 1: MapReduce
 
-A distributed MapReduce system built in Go, modeled after the original Google architecture. It utilizes a central Coordinator to manage tasks and stateless Workers to process data in parallel. Unit tests are added to `coordinator_tests.go` and `worker_tests.go` to help better understanding.
+A distributed MapReduce system built in Go, modeled after the original Google architecture. A central Coordinator manages the two-phase pipeline while stateless Workers execute tasks in parallel. Unit tests are added to `coordinator_test.go` and `worker_test.go` to help better understanding.
+
+### Architecture & RPC Protocol
+* **Coordinator/Worker Loop:** Workers poll the Coordinator via `GetTask` RPC, receive a `WorkerDirective` (`DoMap`, `DoReduce`, `Wait`, or `Exit`), execute the task, and report completion via `ReportTask` RPC.
+* **Domain Model Separation:** `TaskPhase` (`MapPhase`, `ReducePhase`, `DonePhase`) represents the Coordinator's lifecycle state, while `WorkerDirective` represents coordinator-to-worker control signals — keeping the two concerns distinct.
 
 ### Core Features
-* **Fault Tolerance:** A 10-second watchdog timer in the Coordinator detects and reassigns tasks from crashed or slow workers.
+* **Phase Gating:** The Coordinator enforces a strict Map → Reduce ordering. Reduce tasks are never assigned until every Map task is complete, guaranteeing all intermediate files exist before any Reduce task reads them.
+* **Fault Tolerance:** A 10-second watchdog timer in the Coordinator detects and reassigns tasks from crashed or slow workers. No heartbeat is needed — stale tasks are simply re-dispatched.
 * **Atomic Commits:** Workers use a "write-to-temp-and-rename" pattern to ensure that partial failures never result in corrupted output files.
-* **Deterministic Partitioning:** Uses `ihash` to ensure all instances of the same key map to the same Reduce bucket.
+* **Deterministic Partitioning:** Uses `ihash` to ensure all instances of the same key map to the same Reduce bucket. Intermediate files follow the `mr-X-Y` naming convention (Map task X, Reduce bucket Y), which is the glue connecting the two phases.
 
 ---
 
