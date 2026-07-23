@@ -101,23 +101,23 @@ func (rs *rfsrv) getraft() raftapi.Raft {
 	return rs.raft
 }
 
-// The Raft server sends each command into an ChecLogs RPC to the
+// The Raft server sends each command into an CheckLogs RPC to the
 // tester so that the tester knows what the server has received and
 // can check against what it expected.
 func (rs *rfsrv) applier(applyCh chan raftapi.ApplyMsg) {
 	for m := range applyCh {
-		if m.CommandValid == false {
-			// ignore other types of ApplyMsg
-		} else {
-			err_msg, prevok := rs.ts.CheckLogs(rs.me, m)
-			if m.CommandIndex > 1 && prevok == false {
-				err_msg = fmt.Sprintf("server %v apply out of order %v", rs.me, m.CommandIndex)
-			}
-			if err_msg != "" {
-				rs.ts.ApplyErr(rs.me, err_msg)
-				// keep reading after error so that Raft doesn't block
-				// holding locks...
-			}
+		if !m.CommandValid {
+			continue // ignore other types of ApplyMsg
+		}
+		
+		errMsg, prevOk := rs.ts.CheckLogs(rs.me, m)
+		if m.CommandIndex > 1 && !prevOk {
+			errMsg = fmt.Sprintf("server %v apply out of order %v", rs.me, m.CommandIndex)
+		}
+		
+		if errMsg != "" {
+			rs.ts.ApplyErr(rs.me, errMsg)
+			// keep reading after error so that Raft doesn't block holding locks...
 		}
 	}
 }
@@ -131,54 +131,58 @@ func (rs *rfsrv) applierSnap(applyCh chan raftapi.ApplyMsg) {
 	}
 
 	for m := range applyCh {
-		err_msg := ""
+		errMsg := ""
 		if m.SnapshotValid {
-			err_msg = rs.ingestSnap(m.Snapshot, m.SnapshotIndex)
+			errMsg = rs.ingestSnap(m.Snapshot, m.SnapshotIndex)
 			rs.ts.IngestLog(rs.me, rs.log)
 		} else if m.CommandValid {
 			if m.CommandIndex != rs.lastApplied+1 {
-				err_msg = fmt.Sprintf("server %v apply out of order, expected index %v, got %v", rs.me, rs.lastApplied+1, m.CommandIndex)
+				errMsg = fmt.Sprintf("server %v apply out of order, expected index %v, got %v", rs.me, rs.lastApplied+1, m.CommandIndex)
 			}
 
-			if err_msg == "" {
-				var prevok bool
-				err_msg, prevok = rs.ts.CheckLogs(rs.me, m)
-				if err_msg != "ErrRPC" && m.CommandIndex > 1 && prevok == false {
-					err_msg = fmt.Sprintf("server %v apply out of order %v", rs.me, m.CommandIndex)
+			if errMsg == "" {
+				var prevOk bool
+				errMsg, prevOk = rs.ts.CheckLogs(rs.me, m)
+				if errMsg != "ErrRPC" && m.CommandIndex > 1 && !prevOk {
+					errMsg = fmt.Sprintf("server %v apply out of order %v", rs.me, m.CommandIndex)
 				}
 			}
 
-			rs.log[m.CommandIndex] = m.Command // for shapshots
+			rs.log[m.CommandIndex] = m.Command // for snapshots
 			rs.lastApplied = m.CommandIndex
 
 			if (m.CommandIndex+1)%SnapShotInterval == 0 {
-				w := new(bytes.Buffer)
-				e := labgob.NewEncoder(w)
-				e.Encode(m.CommandIndex)
-				var xlog []any
-				for j := 0; j <= m.CommandIndex; j++ {
-					xlog = append(xlog, rs.log[j])
-				}
-				e.Encode(xlog)
-				start := tester.GetAnnotatorTimestamp()
-				rf := rs.getraft()
-				rf.Snapshot(m.CommandIndex, w.Bytes())
-				desp := fmt.Sprintf("snapshot created by %v", rs.me)
-				details := fmt.Sprintf(
-					"snapshot created by server %v after applying the command at index %v",
-					rs.me,
-					m.CommandIndex)
-				tester.PostAnnotatorInfoInterval(start, desp, details)
+				rs.createSnapshot(m.CommandIndex)
 			}
 		} else {
-			// Ignore other types of ApplyMsg.
+			continue // Ignore other types of ApplyMsg.
 		}
-		if err_msg != "" {
-			rs.ts.ApplyErr(rs.me, err_msg)
-			// keep reading after error so that Raft doesn't block
-			// holding locks...
+		
+		if errMsg != "" {
+			rs.ts.ApplyErr(rs.me, errMsg)
+			// keep reading after error so that Raft doesn't block holding locks...
 		}
 	}
+}
+
+func (rs *rfsrv) createSnapshot(commandIndex int) {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(commandIndex)
+	var xlog []any
+	for j := 0; j <= commandIndex; j++ {
+		xlog = append(xlog, rs.log[j])
+	}
+	e.Encode(xlog)
+	start := tester.GetAnnotatorTimestamp()
+	rf := rs.getraft()
+	rf.Snapshot(commandIndex, w.Bytes())
+	desp := fmt.Sprintf("snapshot created by %v", rs.me)
+	details := fmt.Sprintf(
+		"snapshot created by server %v after applying the command at index %v",
+		rs.me,
+		commandIndex)
+	tester.PostAnnotatorInfoInterval(start, desp, details)
 }
 
 // returns "" or error string

@@ -10,16 +10,16 @@ func (rf *Raft) logical2Physical(logicalIndex int) int {
 	return logicalIndex - rf.snapshotIndex
 }
 
-func (rf *Raft) getLatestLogIndex() int {
+func (rf *Raft) getLastLogIndex() int {
 	return len(rf.logEntries) - 1 + rf.snapshotIndex
 }
 
 func (rf *Raft) getLatestLogTerm() int {
-	return rf.logEntries[rf.logical2Physical(rf.getLatestLogIndex())].ElectionTerm
+	return rf.logEntries[rf.logical2Physical(rf.getLastLogIndex())].ElectionTerm
 }
 
 func (rf *Raft) advanceLeaderCommitIndex() {
-	for candidateIndex := rf.getLatestLogIndex(); candidateIndex > rf.highestCommittedIndex; candidateIndex-- {
+	for candidateIndex := rf.getLastLogIndex(); candidateIndex > rf.highestCommittedIndex; candidateIndex-- {
 		isBeforeSnapshot := candidateIndex <= rf.snapshotIndex
 		if isBeforeSnapshot {
 			break
@@ -88,7 +88,7 @@ func (rf *Raft) checkLogConsistency(args *AppendEntriesArgs, reply *AppendEntrie
 	reply.ConflictIndex = -1
 	reply.LogLength = len(rf.logEntries) + rf.snapshotIndex
 
-	logIsTooShort := rf.getLatestLogIndex() < args.IndexBeforeNewEntries
+	logIsTooShort := rf.getLastLogIndex() < args.IndexBeforeNewEntries
 	if logIsTooShort {
 		return false
 	}
@@ -126,7 +126,7 @@ func (rf *Raft) mergeLogEntries(indexBeforeNew int, newEntries []LogEntry) {
 			continue
 		}
 
-		existsLocally := targetIndex <= rf.getLatestLogIndex()
+		existsLocally := targetIndex <= rf.getLastLogIndex()
 		if existsLocally {
 			physicalIndex := rf.logical2Physical(targetIndex)
 			hasConflict := rf.logEntries[physicalIndex].ElectionTerm != incomingEntry.ElectionTerm
@@ -161,7 +161,7 @@ func (rf *Raft) updateFollowerCommitIndex(leaderCommittedIndex int, indexBeforeN
 
 func (rf *Raft) isCandidateLogUpToDate(candidateLastLogTerm int, candidateLastLogIndex int) bool {
 	myLastLogTerm := rf.getLatestLogTerm()
-	myLastLogIndex := rf.getLatestLogIndex()
+	myLastLogIndex := rf.getLastLogIndex()
 
 	if candidateLastLogTerm != myLastLogTerm {
 		return candidateLastLogTerm > myLastLogTerm
@@ -175,7 +175,7 @@ func (rf *Raft) calculateNextIndexFastRollback(conflictTerm int, conflictIndex i
 		return followerLogLength
 	}
 
-	for i := rf.getLatestLogIndex(); i > rf.snapshotIndex; i-- {
+	for i := rf.getLastLogIndex(); i > rf.snapshotIndex; i-- {
 		leaderHasConflictTerm := rf.logEntries[rf.logical2Physical(i)].ElectionTerm == conflictTerm
 		if leaderHasConflictTerm {
 			return i + 1
@@ -194,7 +194,7 @@ func (rf *Raft) truncateLogForLocalSnapshot(index int) {
 }
 
 func (rf *Raft) truncateLogForInstallSnapshot(lastIncludedIndex int, lastIncludedTerm int) {
-	hasMatchingEntry := lastIncludedIndex <= rf.getLatestLogIndex() &&
+	hasMatchingEntry := lastIncludedIndex <= rf.getLastLogIndex() &&
 		rf.logEntries[rf.logical2Physical(lastIncludedIndex)].ElectionTerm == lastIncludedTerm
 
 	if hasMatchingEntry {

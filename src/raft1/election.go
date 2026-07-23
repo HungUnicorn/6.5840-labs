@@ -56,7 +56,7 @@ func (rf *Raft) startElection(term int) {
 	args := RequestVoteArgs{
 		Term:         term,
 		CandidateId:  rf.me,
-		LastLogIndex: rf.getLatestLogIndex(),
+		LastLogIndex: rf.getLastLogIndex(),
 		LastLogTerm:  rf.getLatestLogTerm(),
 	}
 	rf.mu.Unlock()
@@ -122,7 +122,7 @@ func (rf *Raft) becomeLeader() {
 	rf.nextLogIndexToSend = make([]int, totalPeers)
 	rf.highestReplicatedIndex = make([]int, totalPeers)
 
-	latestIndex := rf.getLatestLogIndex()
+	latestIndex := rf.getLastLogIndex()
 	for peerId := range rf.peers {
 		rf.nextLogIndexToSend[peerId] = latestIndex + 1
 		rf.highestReplicatedIndex[peerId] = 0

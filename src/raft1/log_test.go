@@ -24,8 +24,8 @@ func entry(term int) LogEntry {
 
 func TestGetLatestLogIndex(t *testing.T) {
 	rf := makeTestRaft([]LogEntry{entry(0), entry(1), entry(1), entry(2)})
-	if got := rf.getLatestLogIndex(); got != 3 {
-		t.Errorf("getLatestLogIndex() = %d, want 3", got)
+	if got := rf.getLastLogIndex(); got != 3 {
+		t.Errorf("getLastLogIndex() = %d, want 3", got)
 	}
 }
 

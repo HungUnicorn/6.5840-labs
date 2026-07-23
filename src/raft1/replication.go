@@ -135,7 +135,7 @@ func (rf *Raft) buildAppendEntriesArgs(targetPeerId int) AppendEntriesArgs {
 	indexBeforeNew := nextIndexRequired - 1
 	termBeforeNew := rf.logEntries[rf.logical2Physical(indexBeforeNew)].ElectionTerm
 
-	entriesToSend := make([]LogEntry, rf.getLatestLogIndex()-indexBeforeNew)
+	entriesToSend := make([]LogEntry, rf.getLastLogIndex()-indexBeforeNew)
 	copy(entriesToSend, rf.logEntries[rf.logical2Physical(nextIndexRequired):])
 
 	return AppendEntriesArgs{

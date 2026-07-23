@@ -96,7 +96,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	go rf.broadcastAppendEntries()
 
-	return rf.getLatestLogIndex(), rf.currentTerm, true
+	return rf.getLastLogIndex(), rf.currentTerm, true
 }
 
 // the service or tester wants to create a Raft server. the ports
@@ -122,7 +122,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.currentTerm = 0
 	rf.votedFor = -1
 	rf.lastHeartbeat = time.Now()
-	rf.logEntries = make([]LogEntry, 1)
+	dummyLogEntry := LogEntry{}
+	rf.logEntries = []LogEntry{dummyLogEntry}
 	rf.highestCommittedIndex = 0
 	rf.highestAppliedIndex = 0
 	rf.snapshotIndex = 0

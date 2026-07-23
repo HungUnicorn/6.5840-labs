@@ -19,7 +19,6 @@ func newRfproxy(dc *tester.DaemonClnt) *Rfproxy {
 func (rfp *Rfproxy) GetState() (int, bool) {
 	args := &GetStateArgs{}
 	var rep GetStateReply
-	//log.Printf("rfp.GetState %v", rep)
 	if ok := rfp.dc.Call("rfsrv.GetStateRPC", args, &rep); !ok {
 		log.Printf("rfp.GetState failed")
 	}
@@ -32,9 +31,8 @@ func (rfp *Rfproxy) Start(command interface{}) (int, int, bool) {
 	}
 	var rep StartReply
 	if ok := rfp.dc.Call("rfsrv.StartRPC", args, &rep); !ok {
-		//log.Printf("rfp.Start %v failed", args)
+		DPrintf("rfp.Start %v failed", args)
 	}
-	//log.Printf("rfp.Start reply i %d t %d leader  %t", rep.Index, rep.Term, rep.Leader)
 	return rep.Index, rep.Term, rep.Leader
 }
 
@@ -68,7 +66,7 @@ func (tp *TesterProxy) IngestLog(index int, m map[int]any) {
 	var rep IngestLogReply
 	ok := tp.Call("Test.IngestLogRPC", args, &rep)
 	if !ok {
-		//log.Printf("IngestLog: IngestLogRPC %d ok %t", index, ok)
+		DPrintf("IngestLog: IngestLogRPC %d ok %t", index, ok)
 	}
 }
 
@@ -80,6 +78,6 @@ func (tp *TesterProxy) ApplyErr(index int, err string) {
 	var rep ApplyErrReply
 	ok := tp.Call("Test.ApplyErrRPC", args, &rep)
 	if !ok {
-		//log.Printf("ApplyErr: ApplyErrRPC %d %q ok %t", index, err, ok)
+		DPrintf("ApplyErr: ApplyErrRPC %d %q ok %t", index, err, ok)
 	}
 }
