@@ -11,6 +11,9 @@ import (
 	"6.5840/tester1"
 )
 
+const leaderCheckInterval = 50 * time.Millisecond
+
+
 type Op struct {
 	OriginServerId int
 	OperationId    int64
@@ -44,7 +47,7 @@ type RSM struct {
 	sm           StateMachine
 	
 	operationIdCounter int64
-	pendingOperations  map[int]chan OperationResult
+	pendingOperations  map[int64]chan OperationResult
 }
 
 // servers[] contains the ports of the set of
@@ -68,7 +71,7 @@ func MakeRSM(servers []*labrpc.ClientEnd, me int, persister *tester.Persister, m
 		maxraftstate:      maxraftstate,
 		applyCh:           make(chan raftapi.ApplyMsg),
 		sm:                sm,
-		pendingOperations: make(map[int]chan OperationResult),
+		pendingOperations: make(map[int64]chan OperationResult),
 	}
 	if !tester.UseRaftStateMachine {
 		rsm.rf = raft.Make(servers, me, persister, rsm.applyCh)
@@ -104,21 +107,25 @@ func (rsm *RSM) handleCommand(msg raftapi.ApplyMsg) {
 
 	executionResult := rsm.sm.DoOp(op.ClientRequest)
 
-	rsm.notifyWaitingClient(msg.CommandIndex, op.OperationId, executionResult)
+	rsm.notifyWaitingClient(op, executionResult)
 
 	if rsm.shouldTakeSnapshot() {
 		rsm.takeSnapshot(msg.CommandIndex)
 	}
 }
 
-func (rsm *RSM) notifyWaitingClient(index int, opId int64, result any) {
+func (rsm *RSM) notifyWaitingClient(op Op, result any) {
+	if op.OriginServerId != rsm.me {
+		return
+	}
+
 	rsm.mu.Lock()
-	ch, exists := rsm.pendingOperations[index]
+	ch, exists := rsm.pendingOperations[op.OperationId]
 	rsm.mu.Unlock()
 
 	if exists {
 		ch <- OperationResult{
-			OperationId:     opId,
+			OperationId:     op.OperationId,
 			ExecutionResult: result,
 		}
 	}
@@ -147,6 +154,18 @@ func (rsm *RSM) cleanupPendingOperations() {
 	rsm.mu.Unlock()
 }
 
+func (rsm *RSM) addPendingOperation(operationId int64, ch chan OperationResult) {
+	rsm.mu.Lock()
+	defer rsm.mu.Unlock()
+	rsm.pendingOperations[operationId] = ch
+}
+
+func (rsm *RSM) removePendingOperation(operationId int64) {
+	rsm.mu.Lock()
+	defer rsm.mu.Unlock()
+	delete(rsm.pendingOperations, operationId)
+}
+
 
 // Submit a command to Raft, and wait for it to be committed.  It
 // should return ErrWrongLeader if client should find new leader and
@@ -154,7 +173,8 @@ func (rsm *RSM) cleanupPendingOperations() {
 func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 	rsm.mu.Lock()
 	rsm.operationIdCounter++
-	operationId := rsm.operationIdCounter
+	// Combine UnixNano (for boot uniqueness) and the counter to prevent collisions across restarts
+	operationId := time.Now().UnixNano() + rsm.operationIdCounter
 	rsm.mu.Unlock()
 
 	op := Op{
@@ -163,23 +183,18 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 		ClientRequest:  req,
 	}
 
-	index, term, isLeader := rsm.rf.Start(op)
+	ch := make(chan OperationResult, 1)
+	rsm.addPendingOperation(operationId, ch)
+
+	_, term, isLeader := rsm.rf.Start(op)
 	if !isLeader {
+		rsm.removePendingOperation(operationId)
 		return rpc.ErrWrongLeader, nil
 	}
 
-	rsm.mu.Lock()
-	ch := make(chan OperationResult, 1)
-	rsm.pendingOperations[index] = ch
-	rsm.mu.Unlock()
+	defer rsm.removePendingOperation(operationId)
 
-	defer func() {
-		rsm.mu.Lock()
-		delete(rsm.pendingOperations, index)
-		rsm.mu.Unlock()
-	}()
-
-	ticker := time.NewTicker(50 * time.Millisecond)
+	ticker := time.NewTicker(leaderCheckInterval)
 	defer ticker.Stop()
 
 	for {

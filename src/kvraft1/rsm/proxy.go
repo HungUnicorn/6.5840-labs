@@ -26,7 +26,6 @@ func (rsp *RSMproxy) Submit(req any) (rpc.Err, any) {
 	args := &SubmitArgs{Req: req}
 	var rep SubmitReply
 	if ok := rsp.dc.Call("rsmSrv.SubmitRPC", args, &rep); !ok {
-		//log.Printf("%v: rsp.Submit err %v %T", rsp.rpcc.Server(), rep, rep)
 	}
 	return rep.Err, rep.Rep
 }

@@ -59,24 +59,26 @@ func (rs *rsmSrv) GetCounter() int {
 }
 
 func (rs *rsmSrv) DoOp(req any) any {
-	//log.Printf("%d: DoOp: %T(%v)", rs.me, req, req)
 	switch req.(type) {
 	case Inc:
 		rs.mu.Lock()
 		rs.counter += 1
 		rs.mu.Unlock()
 		return IncRep{rs.counter}
+	case Dec:
+		rs.mu.Lock()
+		rs.counter -= 1
+		rs.mu.Unlock()
+		return IncRep{rs.counter}
 	case Null:
 		return NullRep{}
 	default:
-		// wrong type! expecting an Inc.
-		log.Fatalf("DoOp should execute only Inc and not %T", req)
+		log.Printf("Warning: DoOp received unknown type %T", req)
 	}
 	return nil
 }
 
 func (rs *rsmSrv) Snapshot() []byte {
-	//log.Printf("%d: snapshot", rs.me)
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(rs.counter)
@@ -89,12 +91,10 @@ func (rs *rsmSrv) Restore(data []byte) {
 	if d.Decode(&rs.counter) != nil {
 		log.Fatalf("%v couldn't decode counter", rs.me)
 	}
-	//log.Printf("%d: restore %d", rs.me, rs.counter)
 }
 
 func (rs *rsmSrv) Submit(req any) (rpc.Err, any) {
 	err, rep := rs.rsm.Submit(req)
-	//log.Printf("Submit %d %v %v %T", rs.me, err, rep, rep)
 	return err, rep
 }
 
